@@ -1,90 +1,93 @@
-# Initial KB seed. Loaded once on first run if kb_entries is empty.
-# Keywords include EN + VI so fuzzy search works for Vietnamese queries.
+# KB seed — câu hỏi + câu trả lời tiếng Việt.
+# Keywords: EN + VI để fuzzy search hoạt động cho cả hai ngôn ngữ.
 # Categories: focus, stress, sleep, motivation, anxiety, relationships, habits, general
 
 - category: focus
-  question: I can't focus today, what helps?
+  question: Hôm nay mình không tập trung được, có cách nào giúp không?
   answer: |
-    Try the 25/5 Pomodoro: 25 min single-task, 5 min stand-up break, repeat 4x then a 30 min break.
-    Close every browser tab except the one you need. If your mind keeps wandering, write the
-    distracting thought on paper — your brain stops chasing it once it's "saved".
+    Thử kỹ thuật Pomodoro 25/5: làm 1 việc 25 phút, nghỉ 5 phút, lặp 4 lần rồi nghỉ dài 30 phút.
+    Đóng hết tab không cần thiết. Nếu suy nghĩ cứ lởn vởn, viết ra giấy —
+    não sẽ thôi bám vì biết nó đã được "lưu" rồi.
   keywords: >
     focus, concentrate, distracted, can't focus, pomodoro, attention,
     không tập trung, mất tập trung, phân tâm, tập trung, khó tập trung,
     mãi không làm được, đầu óc lơ đãng, làm việc hiệu quả
 
 - category: stress
-  question: I'm feeling overwhelmed
+  question: Mình đang cảm thấy bị quá tải
   answer: |
-    Pause for 60 seconds. Inhale 4s, hold 4s, exhale 6s — repeat 5 times. This activates your
-    parasympathetic system and lowers cortisol. Then write down the top 3 things on your mind
-    and pick ONE to act on next. Overwhelm usually comes from carrying everything at once.
+    Dừng lại 60 giây. Hít vào 4s, giữ 4s, thở ra 6s — lặp 5 lần.
+    Cách này kích hoạt hệ thần kinh phó giao cảm, giảm cortisol.
+    Sau đó viết ra 3 điều đang nặng đầu nhất và chọn MỘT cái để làm tiếp theo.
+    Quá tải thường đến từ việc cố ôm hết mọi thứ cùng lúc.
   keywords: >
     overwhelmed, stress, stressed, anxious, too much, panic,
     căng thẳng, stress, quá tải, lo lắng, áp lực, bị áp đảo,
     quá nhiều việc, không chịu nổi, kiệt sức, mệt mỏi tinh thần
 
 - category: sleep
-  question: I can't sleep at night
+  question: Mình mất ngủ, không ngủ được ban đêm
   answer: |
-    Three things tonight: (1) no screens 30 min before bed, (2) cool room (~19°C), (3) if you
-    can't sleep after 20 min, get up, sit in dim light, read something boring on paper, then
-    try again. Don't lie there fighting it — that trains your brain to associate the bed with anxiety.
+    Ba điều tối nay: (1) tắt màn hình 30 phút trước khi ngủ,
+    (2) phòng mát ~19°C, (3) nếu nằm 20 phút chưa ngủ được thì dậy,
+    ngồi chỗ tối, đọc sách giấy buồn tẻ rồi thử lại.
+    Đừng nằm cố vì như vậy não sẽ quen liên kết giường với lo lắng.
   keywords: >
     sleep, insomnia, can't sleep, awake, tired, restless,
     mất ngủ, không ngủ được, khó ngủ, thức đêm, trằn trọc,
     ngủ không sâu, hay thức giấc, mệt mà không ngủ được
 
 - category: motivation
-  question: I have no motivation to start
+  question: Mình không có động lực để bắt đầu
   answer: |
-    Motivation follows action, not the other way around. Commit to just 2 minutes — open the
-    file, put on running shoes, write one sentence. The "starting cost" is the real barrier;
-    once you've started, momentum carries you. If 2 min feels too much, do 30 seconds.
+    Động lực đến sau hành động, không phải trước.
+    Cam kết chỉ 2 phút thôi — mở file, mang giày, viết một câu.
+    Rào cản thật sự là chi phí bắt đầu; một khi đã bắt đầu, đà sẽ tự cuốn đi.
+    Nếu 2 phút vẫn còn ngại, thì 30 giây thôi.
   keywords: >
     motivation, lazy, procrastinate, can't start, no energy, motivated,
     thiếu động lực, lười biếng, trì hoãn, không muốn làm, không có năng lượng,
     không thấy hứng, mãi không bắt đầu được, chây lười, không có cảm hứng
 
 - category: anxiety
-  question: I keep worrying about something
+  question: Mình cứ lo lắng mãi về một điều gì đó
   answer: |
-    Try the 5-4-3-2-1 grounding: name 5 things you can see, 4 you can touch, 3 you can hear,
-    2 you can smell, 1 you can taste. This pulls your brain out of the worry loop and back
-    to the present. If the worry is about a real problem, schedule a 15-min "worry slot"
-    later today and tell yourself you'll think about it then.
+    Thử kỹ thuật 5-4-3-2-1: nêu tên 5 thứ nhìn thấy, 4 thứ chạm được,
+    3 thứ nghe được, 2 thứ ngửi được, 1 thứ nếm được.
+    Cách này kéo não ra khỏi vòng lo lắng và về hiện tại.
+    Nếu lo về vấn đề thật, đặt "khung lo" 15 phút sau và tự nhủ sẽ suy nghĩ đúng lúc đó.
   keywords: >
     anxiety, worry, anxious, nervous, fear, scared,
     lo âu, lo lắng, hồi hộp, sợ hãi, lo ngại, lo sợ,
     cứ nghĩ mãi, không dứt lo được, bất an, căng thẳng lo lắng
 
 - category: habits
-  question: How do I build a new habit?
+  question: Làm sao để xây dựng một thói quen mới?
   answer: |
-    Stack it: do the new habit right after an existing one ("after I brush teeth, I'll meditate
-    1 min"). Keep it laughably small at first — the goal for week 1 is not the result, it's
-    showing up. Track it on a paper calendar with an X. Don't break the chain.
+    Ghép thói quen mới vào sau thói quen cũ: "sau khi đánh răng, mình sẽ thiền 1 phút".
+    Tuần đầu giữ thật nhỏ — mục tiêu không phải kết quả, mà là việc xuất hiện.
+    Đánh dấu X vào lịch giấy mỗi ngày. Đừng để đứt chuỗi.
   keywords: >
     habit, routine, build habit, consistency, daily,
     thói quen, xây dựng thói quen, duy trì thói quen, kiên trì, đều đặn,
     thói quen hàng ngày, lịch trình, tạo thói quen mới
 
 - category: relationships
-  question: I had a fight with someone close
+  question: Mình vừa cãi nhau với người thân
   answer: |
-    Give it a few hours before responding — emotional spikes pass faster than we think. When
-    you do reconnect, lead with what you understood from their side, even if you disagree.
-    "I hear that you felt X" is disarming. Then share your side as feelings, not accusations.
+    Cho qua vài tiếng trước khi phản ứng — cảm xúc bùng phát rồi tự xẹp nhanh hơn mình nghĩ.
+    Khi nói chuyện lại, mở đầu bằng phía của họ dù mình không đồng ý: "Mình hiểu bạn cảm thấy X".
+    Nói như vậy giúp hạ nhiệt. Sau đó mới chia sẻ cảm xúc của mình — dạng cảm xúc, không phải buộc tội.
   keywords: >
     fight, argue, conflict, relationship, partner, family, friend,
     cãi nhau, mâu thuẫn, xung đột, tranh cãi, tình cảm, bạn bè, gia đình,
     người thân, mâu thuẫn tình cảm, hiểu lầm, giận nhau
 
 - category: general
-  question: I just want to talk
+  question: Mình chỉ muốn tâm sự thôi
   answer: |
-    I'm here. Tell me what's on your mind — there's no wrong way to start. If it helps, you
-    can begin with "today I felt..." or "I've been thinking about..." and let it flow from there.
+    Mình đây. Kể mình nghe đi — không cần bắt đầu theo cách nào cụ thể.
+    Nếu không biết bắt đầu từ đâu, thử "Hôm nay mình cảm thấy..." và cứ để nó chảy tự nhiên.
   keywords: >
     talk, listen, chat, share, lonely,
     muốn chia sẻ, lắng nghe, tâm sự, cô đơn, buồn,

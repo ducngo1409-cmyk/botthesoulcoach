@@ -1,18 +1,21 @@
 """Gemini Flash client for grounded RAG.
 
-Migrated to the `google-genai` SDK (replaces deprecated `google-generativeai`).
-
-The LLM is *only* used as a fallback when the KB matcher score is below the
-fuzzy threshold. The prompt constrains the model to the KB context and
-instructs it to reply in the user's language (EN or VI).
+Key design decisions:
+- system_instruction passed via config (not concatenated into contents) — lets
+  Google apply context caching on the stable instruction portion.
+- Multi-key failover: rotates to the next key on 429 before giving up.
+- Raises LLMQuotaError on exhausted quota so the caller can notify supervisor.
+- Logs input/output token counts from usage_metadata after every call.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import List, Tuple
+import time
+from typing import List, Optional, Tuple
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 from config import settings
@@ -20,19 +23,40 @@ from services.kb import KBEntry
 
 log = logging.getLogger(__name__)
 
-_client: genai.Client | None = None
+# --- Exception types used by callers ------------------------------------
+
+class LLMQuotaError(Exception):
+    """Raised when all API keys are quota-exhausted (HTTP 429)."""
+
+class LLMError(Exception):
+    """Raised for any other Gemini API failure."""
 
 
-def _ensure_client() -> genai.Client:
-    global _client
-    if _client is None:
-        s = settings()
-        _client = genai.Client(api_key=s.gemini_api_key)
-    return _client
+# --- Client pool (one per API key) --------------------------------------
+
+_clients: list[genai.Client] = []
 
 
-# Compact system prompt — ~60 tokens vs ~350 before.
-# The model infers context from KB entries; we don't need verbose instructions.
+def _init_clients() -> None:
+    global _clients
+    s = settings()
+    keys = [s.gemini_api_key]
+    if s.gemini_api_key_2:
+        keys.append(s.gemini_api_key_2)
+    _clients = [genai.Client(api_key=k) for k in keys]
+    log.info("LLM: %d API key(s) configured", len(_clients))
+
+
+def _get_clients() -> list[genai.Client]:
+    if not _clients:
+        _init_clients()
+    return _clients
+
+
+# --- Prompt building ----------------------------------------------------
+
+# Compact system instruction (~60 tokens). Passed via config.system_instruction
+# so Google can cache it separately from user content.
 _SYSTEM = (
     "Soul Coach: ấm áp, ngắn gọn. Dùng ngôn ngữ của user (VI hoặc EN). "
     "Cảm xúc → đồng cảm trước, gợi ý nhẹ sau. Không bao giờ nói không biết. "
@@ -40,20 +64,16 @@ _SYSTEM = (
     "Không tự nhận là bác sĩ. Tối đa 80 từ."
 )
 
-# KB relevance cutoff: don't send entries that scored below this — they just waste tokens.
 _KB_MIN_SCORE = 40
-# Max KB entries to include in prompt context
 _KB_MAX_ENTRIES = 2
 
 
 def _format_kb(entries: List[Tuple[KBEntry, float]]) -> str:
-    """Only include relevant entries, with truncated answers to save tokens."""
     relevant = [(e, s) for e, s in entries if s >= _KB_MIN_SCORE][:_KB_MAX_ENTRIES]
     if not relevant:
         return ""
     lines = []
     for e, _ in relevant:
-        # Truncate answer — model needs the gist, not the full text
         short_a = e.answer.strip().replace("\n", " ")[:100]
         lines.append(f"[{e.category}] {e.question} → {short_a}")
     return "\n".join(lines)
@@ -65,45 +85,75 @@ def _format_history(history: List[Tuple[str, str]]) -> str:
     return "\n".join(f"{role}: {text}" for role, text in history)
 
 
-def soft_reply(
+def _build_prompt(
     query: str,
     kb_candidates: List[Tuple[KBEntry, float]],
     history: List[Tuple[str, str]],
 ) -> str:
-    """Generate a grounded soft-reply. Returns the bot reply text."""
-    client = _ensure_client()
-    s = settings()
-
+    parts = []
     kb_block = _format_kb(kb_candidates)
     history_block = _format_history(history)
-
-    # Build a minimal prompt — only include sections that have content
-    parts = [_SYSTEM]
     if kb_block:
         parts.append(f"KB:\n{kb_block}")
     if history_block:
         parts.append(f"Lịch sử:\n{history_block}")
     parts.append(f"User: {query}\nSoul Coach:")
+    return "\n\n".join(parts)
 
-    prompt = "\n\n".join(parts)
 
-    try:
-        resp = client.models.generate_content(
-            model=s.gemini_model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                top_p=0.9,
-                max_output_tokens=180,   # was 400 — 80-word cap needs ~120 tokens
-            ),
-        )
-        text = (resp.text or "").strip()
-        if not text:
-            raise RuntimeError("empty Gemini response")
-        return text
-    except Exception as e:
-        log.exception("Gemini call failed: %s", e)
-        return (
-            "Mình đang gặp chút sự cố kỹ thuật. "
-            "Bạn có thể thử lại sau hoặc nhắn /talk_to_human để kết nối với coach nhé."
-        )
+# --- Main call ----------------------------------------------------------
+
+def soft_reply(
+    query: str,
+    kb_candidates: List[Tuple[KBEntry, float]],
+    history: List[Tuple[str, str]],
+) -> str:
+    """Generate a grounded soft-reply.
+
+    Tries each configured API key in order on quota errors.
+    Raises LLMQuotaError if all keys are exhausted.
+    Raises LLMError on other failures.
+    """
+    prompt = _build_prompt(query, kb_candidates, history)
+    clients = _get_clients()
+    s = settings()
+
+    last_exc: Optional[Exception] = None
+    for idx, client in enumerate(clients):
+        try:
+            resp = client.models.generate_content(
+                model=s.gemini_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=_SYSTEM,
+                    temperature=0.7,
+                    top_p=0.9,
+                    max_output_tokens=180,
+                ),
+            )
+            # Log token usage for debugging
+            if resp.usage_metadata:
+                in_t = resp.usage_metadata.prompt_token_count or 0
+                out_t = resp.usage_metadata.candidates_token_count or 0
+                log.info(
+                    "LLM tokens [key %d]: in=%d out=%d total=%d",
+                    idx, in_t, out_t, in_t + out_t,
+                )
+            text = (resp.text or "").strip()
+            if not text:
+                raise LLMError("empty Gemini response")
+            return text
+
+        except genai_errors.ClientError as e:
+            if e.status_code == 429:
+                log.warning("Key %d quota exhausted (429) — %s", idx, str(e)[:120])
+                last_exc = LLMQuotaError(f"key_{idx}: {str(e)[:200]}")
+                continue  # try next key
+            log.exception("Gemini API error (key %d): %s", idx, e)
+            raise LLMError(str(e)) from e
+        except Exception as e:
+            log.exception("Unexpected LLM error (key %d): %s", idx, e)
+            raise LLMError(str(e)) from e
+
+    # All keys exhausted
+    raise last_exc or LLMQuotaError("all keys quota-exhausted")

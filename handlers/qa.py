@@ -16,9 +16,10 @@ Pipeline:
 from __future__ import annotations
 
 import logging
+import time
 from typing import List, Tuple
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import ChatAction, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from config import settings
@@ -27,6 +28,10 @@ from services import kb, satisfaction, llm
 from services.kb import KBEntry
 
 log = logging.getLogger(__name__)
+
+# Rate-limit quota-error DMs to supervisor: at most once per 10 minutes.
+_last_quota_notify: float = 0.0
+_QUOTA_NOTIFY_INTERVAL = 600
 
 FEEDBACK_PREFIX_LLM = "💡 Gợi ý từ Soul Coach:\n\n"
 
@@ -154,15 +159,62 @@ async def on_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
-    # KB miss → Gemini RAG soft reply (no parse_mode — LLM text may have unbalanced markdown)
+    # KB miss → Gemini RAG soft reply
+    # Show typing indicator so user knows something is happening
+    await context.bot.send_chat_action(chat_id=user.id, action=ChatAction.TYPING)
+
     history = _recent_history(user.id, n=2)
-    soft = llm.soft_reply(text, candidates, history)
+    try:
+        soft = llm.soft_reply(text, candidates, history)
+    except llm.LLMQuotaError as e:
+        await _handle_quota_error(context, user.id, str(e))
+        return
+    except llm.LLMError:
+        await msg.reply_text(
+            "Mình đang gặp chút sự cố kỹ thuật. "
+            "Bạn có thể thử lại sau hoặc nhắn /talk_to_human để kết nối với coach nhé."
+        )
+        return
+
     reply = FEEDBACK_PREFIX_LLM + soft
     interaction_id = _log_out(user.id, soft, kb_match_id=None, llm_used=True)
     await msg.reply_text(
         reply,
         reply_markup=_feedback_keyboard(interaction_id),
     )
+
+
+# --- Quota / error helpers -----------------------------------------------
+
+async def _handle_quota_error(context, user_id: int, detail: str) -> None:
+    """Tell user, notify supervisor (rate-limited), log."""
+    global _last_quota_notify
+    log.error("LLM quota exhausted: %s", detail[:200])
+
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=(
+            "Mình đang bị giới hạn API tạm thời — xin lỗi bạn nhé! "
+            "Bạn có thể nhắn lại sau hoặc dùng /talk_to_human để gặp coach người thật."
+        ),
+    )
+
+    now = time.time()
+    if now - _last_quota_notify > _QUOTA_NOTIFY_INTERVAL:
+        _last_quota_notify = now
+        s = settings()
+        try:
+            await context.bot.send_message(
+                chat_id=s.supervisor_chat_id,
+                text=(
+                    "⚠️ Gemini API quota exhausted.\n"
+                    f"Chi tiết: {detail[:300]}\n\n"
+                    "Kiểm tra quota tại: https://aistudio.google.com/app/apikey\n"
+                    "Hoặc thêm GEMINI_API_KEY_2 vào .env để dự phòng."
+                ),
+            )
+        except Exception:
+            log.warning("Could not notify supervisor of quota error")
 
 
 # --- Auto KB promotion ---------------------------------------------------

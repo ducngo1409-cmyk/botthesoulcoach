@@ -30,6 +30,7 @@ class Settings:
     telegram_token: str
     supervisor_chat_id: int
     gemini_api_key: str
+    gemini_api_key_2: str          # optional fallback key
     gemini_model: str
     db_path: Path
     default_tz: str
@@ -53,6 +54,7 @@ def load_settings() -> Settings:
         telegram_token=_req("TELEGRAM_TOKEN"),
         supervisor_chat_id=int(_req("SUPERVISOR_CHAT_ID")),
         gemini_api_key=_req("GEMINI_API_KEY"),
+        gemini_api_key_2=os.getenv("GEMINI_API_KEY_2", ""),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-1.5-flash"),
         db_path=db_path,
         default_tz=os.getenv("DEFAULT_TZ", "Asia/Ho_Chi_Minh"),
