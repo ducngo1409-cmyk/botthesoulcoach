@@ -1,4 +1,4 @@
-# Soul Coach Bot — Test Plan (v2.3)
+# Soul Coach Bot — Test Plan (v2.5)
 
 Two automated test suites cover all logic that doesn't require live credentials.
 Manual integration tests are listed for first-run verification before going to production.
@@ -151,25 +151,35 @@ python main.py
 - [ ] `/talk_to_human` → escalation card sent to supervisor with last 5 turns + "Mark resolved" button
 - [ ] Supervisor taps "Mark resolved" → user receives resolution message
 
-#### 2.7 Supervisor task assignment
+#### 2.7 Escalation + resolve flow
+- [ ] Send 10 unhappy messages or /talk_to_human → escalation card sent to supervisor
+- [ ] While escalated: send any message → receives wait-reminder (not silence)
+- [ ] /talk_to_human while already escalated → "bạn đang trong hàng chờ" message (not silence)
+- [ ] Supervisor taps "Mark resolved" or /resolve <uid> → user gets re-activated message
+- [ ] Restart bot with unresolved escalation older than 24h → auto-cleared on startup
+
+#### 2.8 Supervisor task assignment
 - [ ] Supervisor: `/settask <user_id> | Uống nước | 0 9 * * *` → confirmation + user receives DM with new reminder
 - [ ] User: `/tasks` → new reminder appears in list
 
-#### 2.8 Supervisor KB management
+#### 2.9 /debug command
+- [ ] Supervisor sends /debug → snapshot showing user count, escalated sessions, open escalations, recent LLM replies
+
+#### 2.10 Supervisor KB management
 - [ ] `/kb_add test | What is X? | X is a test. | x,test`
 - [ ] `/kb_list test` → shows new entry
 - [ ] `/kb_edit <id> answer=Updated answer.`
 - [ ] `/kb_del <id>`
 
-#### 2.9 Weekly report (on demand)
+#### 2.11 Weekly report (on demand)
 - [ ] Supervisor `/report` → markdown report DM + JSON file attachment
 
-#### 2.10 Health endpoint (UptimeRobot)
+#### 2.12 Health endpoint (UptimeRobot)
 - [ ] Navigate to `http://<server-ip>:8080/health` → `ok`
 - [ ] Open port 8080 in Oracle VCN security list (ingress rule)
 - [ ] Add UptimeRobot HTTP monitor pointing at `http://<server-ip>:8080/health`
 
-#### 2.11 Off-host backup (post-deploy)
+#### 2.13 Off-host backup (post-deploy)
 - [ ] `rclone config` — add remote named `backup`
 - [ ] `chmod +x deploy/backup_offhost.sh && deploy/backup_offhost.sh`
 - [ ] Verify snapshot appears in `~/backups/` and on the rclone remote

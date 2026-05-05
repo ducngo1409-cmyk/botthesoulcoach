@@ -11,11 +11,9 @@ Key design decisions:
 from __future__ import annotations
 
 import logging
-import time
 from typing import List, Optional, Tuple
 
 from google import genai
-from google.genai import errors as genai_errors
 from google.genai import types
 
 from config import settings
@@ -125,6 +123,7 @@ def soft_reply(
         models = ["gemini-2.5-flash-lite"]
 
     last_exc: Optional[Exception] = None
+    saw_quota = False
     for model in models:
         for idx, client in enumerate(clients):
             try:
@@ -146,22 +145,30 @@ def soft_reply(
                         model, idx, in_t, out_t, in_t + out_t,
                     )
                 text = (resp.text or "").strip()
-                if not text:
-                    raise LLMError("empty Gemini response")
-                return text
+                if text:
+                    return text
+                # Empty response (safety filter / model glitch) — failover, don't raise
+                log.warning("LLM empty text [%s key %d] — trying next", model, idx)
+                last_exc = LLMError(f"{model} key_{idx}: empty response")
+                continue
 
             except Exception as e:
                 code = getattr(e, "code", None)
-                # 429 = quota; 5xx = server overload/unavailable. Both: failover.
-                if code == 429 or (isinstance(code, int) and 500 <= code < 600):
-                    log.warning("LLM %s [%s key %d] — %s", code, model, idx, str(e)[:120])
-                    last_exc = (
-                        LLMQuotaError(f"{model} key_{idx}: {str(e)[:200]}")
-                        if code == 429
-                        else LLMError(f"{model} key_{idx}: {code} {str(e)[:200]}")
+                if code == 429:
+                    saw_quota = True
+                    log.warning("LLM 429 [%s key %d] — %s", model, idx, str(e)[:120])
+                    last_exc = LLMQuotaError(f"{model} key_{idx}: {str(e)[:200]}")
+                else:
+                    # 5xx, network timeouts, parse errors, anything else: keep trying.
+                    log.warning(
+                        "LLM error [%s key %d] code=%s — %s",
+                        model, idx, code, str(e)[:160],
                     )
-                    continue  # try next key, then next model
-                log.exception("Gemini API error [%s key %d]: %s", model, idx, e)
-                raise LLMError(str(e)) from e
+                    last_exc = LLMError(f"{model} key_{idx}: {code} {str(e)[:200]}")
+                continue
 
-    raise last_exc or LLMQuotaError("all models/keys quota-exhausted")
+    # All models × keys exhausted. Raise quota error if any key 429'd (so the
+    # supervisor gets the actionable quota DM); otherwise generic LLMError.
+    if saw_quota:
+        raise LLMQuotaError(str(last_exc) if last_exc else "all keys quota-exhausted")
+    raise LLMError(str(last_exc) if last_exc else "all models/keys failed")

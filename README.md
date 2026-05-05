@@ -1,4 +1,4 @@
-# Soul Coach — Telegram Bot (v2.3)
+# Soul Coach — Telegram Bot (v2.5)
 
 A Vietnamese-first mental-coach Telegram bot. Pings users for task check-ins, answers
 from a curated Knowledge Base (KB), uses Gemini Flash as a grounded RAG fallback
@@ -55,6 +55,24 @@ curl http://localhost:8080/health   # → ok
 
 Remember to open port 8080 inbound in the Oracle VCN security list.
 
+
+## Monitoring & debugging (production)
+
+```bash
+# SSH into VM
+gcloud compute ssh soul-coach --zone=us-central1-a
+
+# Live log stream (all output)
+sudo tail -f /home/hallo_5ambloom/Bot_The_Soul_Coach/logs/bot.err.log
+
+# Filter errors + warnings only
+sudo tail -f /home/hallo_5ambloom/Bot_The_Soul_Coach/logs/bot.err.log | grep -E 'ERROR|WARNING|Crisis|Escalat|quota'
+
+# Supervisor Telegram commands:
+#   /debug  — live snapshot (users, escalations, recent LLM replies)
+#   /report — on-demand weekly report
+#   /resolve <user_id> — close a stuck escalation
+```
 ## Production deploy
 
 Two Always Free options — pick one:

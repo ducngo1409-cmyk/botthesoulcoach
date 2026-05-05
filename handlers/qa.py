@@ -36,6 +36,18 @@ _QUOTA_NOTIFY_INTERVAL = 600
 
 FEEDBACK_PREFIX_LLM = "💡 Gợi ý từ Soul Coach:\n\n"
 
+# Offline empathy fallback — used when LLM is unavailable so the bot never goes
+# silent. Generic but warm; user can /talk_to_human for real support.
+_OFFLINE_EMPATHY = (
+    "Mình đọc được điều bạn vừa chia sẻ. Cảm xúc này là có thật và đáng được "
+    "lắng nghe. Bạn có thể kể thêm một chút về điều đang khiến bạn nặng lòng "
+    "không? Hoặc nhắn /talk_to_human nếu bạn muốn nói chuyện với coach người thật."
+)
+
+
+def _offline_empathy(_user_text: str) -> str:
+    return _OFFLINE_EMPATHY
+
 # Crisis keywords (EN + VI). Matched case-insensitively via substring search.
 _CRISIS_KEYWORDS = [
     # English
@@ -173,13 +185,10 @@ async def on_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         soft = llm.soft_reply(text, candidates, history)
     except llm.LLMQuotaError as e:
         await _handle_quota_error(context, user.id, str(e))
-        return
-    except llm.LLMError:
-        await msg.reply_text(
-            "Mình đang gặp chút sự cố kỹ thuật. "
-            "Bạn có thể thử lại sau hoặc nhắn /talk_to_human để kết nối với coach nhé."
-        )
-        return
+        soft = _offline_empathy(text)
+    except llm.LLMError as e:
+        log.warning("LLM unavailable, using offline empathy: %s", str(e)[:200])
+        soft = _offline_empathy(text)
 
     reply = FEEDBACK_PREFIX_LLM + soft
     interaction_id = _log_out(user.id, soft, kb_match_id=None, llm_used=True)

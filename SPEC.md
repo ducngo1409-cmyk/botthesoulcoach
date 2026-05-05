@@ -1,4 +1,4 @@
-# Soul Coach Telegram Bot — Specification (v2.3)
+# Soul Coach Telegram Bot — Specification (v2.5)
 
 > Final, locked-in spec after design discussion. Source of truth for implementation.
 > v2.1 adds: crisis filter, real pause/resume, /health endpoint, tz onboarding,
@@ -69,7 +69,8 @@ IDLE
        │     └─ counter==10 ────────▶ ESCALATED
        └─ tz onboarding reply ──▶ sets users.tz, IDLE
 
-ESCALATED ── S /resolve ──▶ IDLE (counter=0)
+ESCALATED ── S /resolve or auto-clear 24h ──▶ IDLE (counter=0)
+         └─ user messages while escalated ──▶ gentle wait-reminder (not silent)
 ```
 
 ## 6. Functional Modules
@@ -167,6 +168,7 @@ Started in `main.py` before the Telegram poller.
 | `/kb_edit <id> <field>=<value>` | S | Update entry |
 | `/kb_del <id>` | S | Delete entry |
 | `/kb_promote <interaction_id>` | S | Manually promote LLM reply to KB |
+| `/debug` | S | Live status: users, escalations, recent errors |
 | `/settask <user_id> | <title> | <cron>` | S | Assign reminder to a user |
 
 ## 8. Configuration (env vars)
@@ -196,6 +198,10 @@ Started in `main.py` before the Telegram poller.
 - Bot restart recovers pending check-ins (mark missed if past window).
 - User blocks bot → `Forbidden` caught → `users.status='blocked'` → scheduler skips.
 - Crisis keywords handled before any LLM call; no escalation triggered.
+- Stale escalations (>24h open) auto-cleared on bot restart via `db._clear_stale_escalations()`.
+- Escalated users receive a gentle wait-reminder instead of complete silence.
+- Quota errors (Gemini 429) trigger supervisor DM (rate-limited to 1/10min); user gets friendly fallback.
+- Token usage logged per call (usage_metadata); multi-key failover on quota exhaustion.
 
 ## 10. Deployment (Oracle Always Free)
 
