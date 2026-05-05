@@ -150,15 +150,18 @@ def soft_reply(
                     raise LLMError("empty Gemini response")
                 return text
 
-            except genai_errors.ClientError as e:
-                if e.code == 429:
-                    log.warning("Quota 429 [%s key %d] — %s", model, idx, str(e)[:120])
-                    last_exc = LLMQuotaError(f"{model} key_{idx}: {str(e)[:200]}")
+            except Exception as e:
+                code = getattr(e, "code", None)
+                # 429 = quota; 5xx = server overload/unavailable. Both: failover.
+                if code == 429 or (isinstance(code, int) and 500 <= code < 600):
+                    log.warning("LLM %s [%s key %d] — %s", code, model, idx, str(e)[:120])
+                    last_exc = (
+                        LLMQuotaError(f"{model} key_{idx}: {str(e)[:200]}")
+                        if code == 429
+                        else LLMError(f"{model} key_{idx}: {code} {str(e)[:200]}")
+                    )
                     continue  # try next key, then next model
                 log.exception("Gemini API error [%s key %d]: %s", model, idx, e)
-                raise LLMError(str(e)) from e
-            except Exception as e:
-                log.exception("Unexpected LLM error [%s key %d]: %s", model, idx, e)
                 raise LLMError(str(e)) from e
 
     raise last_exc or LLMQuotaError("all models/keys quota-exhausted")
