@@ -22,6 +22,54 @@ def _is_supervisor(update: Update) -> bool:
     )
 
 
+async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/debug — supervisor-only live status snapshot."""
+    if not _is_supervisor(update):
+        return
+
+    users = conn().execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+    escalated = conn().execute(
+        "SELECT user_id FROM sessions WHERE escalated_at IS NOT NULL"
+    ).fetchall()
+    kb_count = conn().execute("SELECT COUNT(*) AS n FROM kb_entries").fetchone()["n"]
+    open_esc = conn().execute(
+        "SELECT user_id, reason, sent_to_s_at FROM escalations "
+        "WHERE resolved_at IS NULL ORDER BY sent_to_s_at DESC LIMIT 5"
+    ).fetchall()
+    recent_errors = conn().execute(
+        "SELECT ts, text FROM interactions WHERE direction='out' AND llm=1 "
+        "ORDER BY id DESC LIMIT 3"
+    ).fetchall()
+
+    lines = ["🔧 *Bot Debug Snapshot*\n"]
+    lines.append(f"👥 Users: {users}")
+    lines.append(f"📚 KB entries: {kb_count}")
+    lines.append(f"🔴 Escalated sessions: {len(escalated)}")
+    if escalated:
+        for r in escalated:
+            lines.append(f"   • uid {r['user_id']}")
+
+    lines.append(f"\n🚨 Open escalations ({len(open_esc)}):")
+    if open_esc:
+        for r in open_esc:
+            lines.append(f"   • uid {r['user_id']} | {r['reason']} | {r['sent_to_s_at']}")
+    else:
+        lines.append("   (none)")
+
+    lines.append("\n💬 Recent LLM replies:")
+    if recent_errors:
+        for r in recent_errors:
+            lines.append(f"   {r['ts']}: {r['text'][:60]}…")
+    else:
+        lines.append("   (none)")
+
+    lines.append(
+        "\n_/resolve <uid> to clear escalation_\n"
+        "_tail -f logs/bot.err.log to monitor live_"
+    )
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def report_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_supervisor(update):
         return

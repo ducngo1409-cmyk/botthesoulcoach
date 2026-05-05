@@ -42,6 +42,31 @@ def init_db() -> None:
 
     log.info("DB initialized at %s", s.db_path)
     _maybe_seed_kb()
+    _clear_stale_escalations()
+
+
+def _clear_stale_escalations() -> None:
+    """On startup: auto-resolve escalations open > 24h — prevents users being stuck forever."""
+    cutoff = conn().execute(
+        "SELECT datetime('now', '-24 hours')"
+    ).fetchone()[0]
+    rows = conn().execute(
+        "SELECT user_id FROM escalations WHERE resolved_at IS NULL AND sent_to_s_at < ?",
+        (cutoff,),
+    ).fetchall()
+    for row in rows:
+        uid = row[0]
+        with transaction() as cx:
+            cx.execute(
+                "UPDATE escalations SET resolved_at = datetime('now') "
+                "WHERE user_id = ? AND resolved_at IS NULL",
+                (uid,),
+            )
+            cx.execute(
+                "UPDATE sessions SET escalated_at = NULL, sat_counter = 0 WHERE user_id = ?",
+                (uid,),
+            )
+        log.info("Auto-cleared stale escalation for user %s (>24h)", uid)
 
 
 def _maybe_seed_kb() -> None:

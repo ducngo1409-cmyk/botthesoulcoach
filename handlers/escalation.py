@@ -65,6 +65,14 @@ async def escalate(
 
     if satisfaction.is_escalated(user_id):
         log.debug("User %s already escalated; skipping duplicate", user_id)
+        # Tell user they're already in queue instead of silently ignoring
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="⏳ Bạn đang trong hàng chờ coach rồi — họ sẽ liên hệ bạn sớm nhé!",
+            )
+        except Exception:
+            pass
         return
 
     satisfaction.mark_escalated(user_id)

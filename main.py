@@ -64,6 +64,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("kb_del", admin.kb_del))
     app.add_handler(CommandHandler("kb_promote", admin.kb_promote))
     app.add_handler(CommandHandler("settask", admin.settask))
+    app.add_handler(CommandHandler("debug", admin.debug_cmd))
 
     # --- Callback queries ---
     app.add_handler(CallbackQueryHandler(reminders.mood_callback, pattern=r"^mood:"))

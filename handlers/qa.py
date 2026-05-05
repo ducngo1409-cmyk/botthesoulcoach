@@ -128,9 +128,13 @@ async def on_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await msg.reply_text(_CRISIS_REPLY, parse_mode="Markdown")
         return
 
-    # If user is escalated, stay quiet — S is handling.
+    # If user is escalated, remind them once instead of going silent.
     if satisfaction.is_escalated(user.id):
-        log.debug("User %s is escalated; bot stays silent", user.id)
+        log.debug("User %s is escalated; sending wait reminder", user.id)
+        await msg.reply_text(
+            "⏳ Bạn đang chờ kết nối với coach người thật. "
+            "Họ sẽ liên hệ bạn sớm nhé — mình vẫn ở đây nếu cần!"
+        )
         return
 
     # Apply satisfaction signal from the text itself
