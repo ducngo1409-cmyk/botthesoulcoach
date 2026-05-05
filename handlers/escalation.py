@@ -120,9 +120,7 @@ async def escalate(
             chat_id=user_id,
             text=(
                 "Mình muốn bạn nhận được hỗ trợ đúng nhất. "
-                "Mình đã kết nối với coach con người — họ sẽ liên hệ bạn sớm. 🤝\n\n"
-                "I want to make sure you get the right support. "
-                "I've looped in a human coach — they'll reach out shortly. 🤝"
+                "Mình đã kết nối với coach con người — họ sẽ liên hệ bạn sớm. 🤝"
             ),
         )
     except Exception:
@@ -164,10 +162,7 @@ async def resolve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         await context.bot.send_message(
             chat_id=user_id,
-            text=(
-                "✨ Mình đã sẵn sàng hỗ trợ bạn trở lại. Bạn cần gì cứ nhắn nhé.\n\n"
-                "✨ I'm back online for you. Let me know how I can help."
-            ),
+            text="✨ Mình đã sẵn sàng hỗ trợ bạn trở lại. Bạn cần gì cứ nhắn nhé.",
         )
     except Exception:
         pass
@@ -200,10 +195,7 @@ async def resolve_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     try:
         await context.bot.send_message(
             chat_id=user_id,
-            text=(
-                "✨ Mình đã sẵn sàng hỗ trợ bạn trở lại. Bạn cần gì cứ nhắn nhé.\n\n"
-                "✨ I'm back online for you. Let me know how I can help."
-            ),
+            text="✨ Mình đã sẵn sàng hỗ trợ bạn trở lại. Bạn cần gì cứ nhắn nhé.",
         )
     except Exception:
         pass

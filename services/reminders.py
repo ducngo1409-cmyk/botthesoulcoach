@@ -71,7 +71,7 @@ async def _send_checkin(app: Application, task_id: int, user_id: int, title: str
 
     text = (
         f"🌱 *Check-in: {title}*\n\n"
-        "How did it go? Reply with a quick note, then tap how you're feeling 👇"
+        "Hôm nay thế nào rồi? Nhắn vài dòng nếu muốn, rồi chọn cảm xúc của bạn nhé 👇"
     )
 
     with transaction() as cx:
@@ -122,7 +122,7 @@ async def _send_nudge(app: Application, checkin_id: int, user_id: int, title: st
     try:
         await app.bot.send_message(
             chat_id=user_id,
-            text=f"⏰ Gentle nudge — still time to check in on *{title}*. No pressure 🌿",
+            text=f"⏰ Nhắc nhẹ thôi — vẫn còn kịp check-in *{title}* đó. Không ép đâu 🌿",
             parse_mode="Markdown",
         )
     except TelegramError as e:
@@ -238,6 +238,6 @@ async def mood_callback(update, context):
             (mood, checkin_id),
         )
     await query.edit_message_text(
-        f"{query.message.text}\n\n_Mood logged: {MOOD_EMOJI[mood - 1]}_",
+        f"{query.message.text}\n\n_Đã ghi nhận cảm xúc: {MOOD_EMOJI[mood - 1]}_",
         parse_mode="Markdown",
     )

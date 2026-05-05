@@ -28,7 +28,7 @@ from services.kb import KBEntry
 
 log = logging.getLogger(__name__)
 
-FEEDBACK_PREFIX_LLM = "💡 _(suggestion based on coach KB)_\n\n"
+FEEDBACK_PREFIX_LLM = "💡 _(gợi ý từ Soul Coach)_\n\n"
 
 # Crisis keywords (EN + VI). Matched case-insensitively via substring search.
 _CRISIS_KEYWORDS = [
@@ -83,8 +83,8 @@ def _log_out(user_id: int, text: str, kb_match_id: int | None, llm_used: bool) -
 
 def _feedback_keyboard(interaction_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("👍 Helped", callback_data=f"sat:{interaction_id}:+"),
-        InlineKeyboardButton("👎 Not really", callback_data=f"sat:{interaction_id}:-"),
+        InlineKeyboardButton("👍 Có ích", callback_data=f"sat:{interaction_id}:+"),
+        InlineKeyboardButton("👎 Chưa giúp được", callback_data=f"sat:{interaction_id}:-"),
     ]])
 
 
@@ -188,7 +188,7 @@ async def feedback_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         satisfaction.reset(user_id, "thumbs up")
         await query.edit_message_reply_markup(reply_markup=None)
         await context.bot.send_message(
-            chat_id=user_id, text="🌟 Glad that helped."
+            chat_id=user_id, text="🌟 Vui vì mình giúp được bạn!"
         )
         return
 
@@ -220,6 +220,6 @@ async def feedback_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await context.bot.send_message(
         chat_id=user_id,
-        text="Got it — let me try a different angle. Can you tell me a bit "
-             "more about what's going on?",
+        text="Mình hiểu rồi — để mình thử theo hướng khác nhé. "
+             "Bạn có thể kể thêm một chút về tình huống của bạn không?",
     )

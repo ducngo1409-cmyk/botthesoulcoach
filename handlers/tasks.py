@@ -31,13 +31,13 @@ async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     ).fetchall()
     if not rows:
         await update.message.reply_text(
-            "You have no reminders yet.\n"
-            "Add one with `/addtask <title> | <cron>`",
+            "Bạn chưa có nhắc nhở nào.\n"
+            "Thêm bằng `/addtask <tên> | <cron>`",
             parse_mode="Markdown",
         )
         return
 
-    lines = ["📌 *Your reminders*"]
+    lines = ["📌 *Nhắc nhở của bạn*"]
     for r in rows:
         flag = "✅" if r["active"] else "⏸"
         lines.append(f"{flag} `#{r['id']}` *{r['title']}* — `{r['cron_expr']}`")
@@ -48,28 +48,28 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not context.args:
         await update.message.reply_text(
-            "Usage: `/addtask <title> | <cron>`\n"
-            "Example: `/addtask Morning meditation | 0 8 * * *`",
+            "Cách dùng: `/addtask <tên> | <cron>`\n"
+            "Ví dụ: `/addtask Thiền buổi sáng | 0 8 * * *`",
             parse_mode="Markdown",
         )
         return
     raw = " ".join(context.args)
     if "|" not in raw:
         await update.message.reply_text(
-            "Missing `|` separator. Try `/addtask Morning meditation | 0 8 * * *`",
+            "Thiếu dấu `|`. Thử `/addtask Thiền buổi sáng | 0 8 * * *`",
             parse_mode="Markdown",
         )
         return
     title, cron_expr = (s.strip() for s in raw.split("|", 1))
     if not title or not cron_expr:
-        await update.message.reply_text("Title and cron are both required.")
+        await update.message.reply_text("Cần có cả tên và biểu thức cron.")
         return
     if not _validate_cron(cron_expr):
         await update.message.reply_text(
-            "That cron expression is invalid. It must be 5 fields.\n"
-            "Cheat sheet: `min hour dom month dow`\n"
-            "• every day 8am: `0 8 * * *`\n"
-            "• every Mon/Wed/Fri 7pm: `0 19 * * 1,3,5`",
+            "Biểu thức cron không hợp lệ. Cần đúng 5 trường.\n"
+            "Gợi nhớ: `phút giờ ngày tháng thứ`\n"
+            "• Mỗi ngày 8 giờ sáng: `0 8 * * *`\n"
+            "• T2/T4/T6 lúc 7 tối: `0 19 * * 1,3,5`",
             parse_mode="Markdown",
         )
         return
@@ -86,7 +86,7 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     schedule_task_job(context.application, new_id, user.id, title, cron_expr)
 
     await update.message.reply_text(
-        f"✅ Reminder #{new_id} added: *{title}* — `{cron_expr}`",
+        f"✅ Đã thêm nhắc nhở #{new_id}: *{title}* — `{cron_expr}`",
         parse_mode="Markdown",
     )
 
@@ -94,12 +94,12 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not context.args:
-        await update.message.reply_text("Usage: `/removetask <id>`", parse_mode="Markdown")
+        await update.message.reply_text("Cách dùng: `/removetask <id>`", parse_mode="Markdown")
         return
     try:
         task_id = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("ID must be a number.")
+        await update.message.reply_text("ID phải là số.")
         return
 
     with transaction() as cx:
@@ -110,12 +110,12 @@ async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         ok = cur.rowcount > 0
 
     if not ok:
-        await update.message.reply_text("No such task.")
+        await update.message.reply_text("Không tìm thấy nhắc nhở này.")
         return
 
     from services.reminders import unschedule_task_job
     unschedule_task_job(context.application, task_id)
-    await update.message.reply_text(f"🗑 Removed reminder #{task_id}.")
+    await update.message.reply_text(f"🗑 Đã xóa nhắc nhở #{task_id}.")
 
 
 async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -134,7 +134,7 @@ async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             pass  # job may not exist if scheduler was just restarted
 
-    await update.message.reply_text("🔕 Reminders paused. /resume to turn them back on.")
+    await update.message.reply_text("🔕 Đã tắt nhắc nhở. Nhắn /resume để bật lại.")
 
 
 async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -153,4 +153,4 @@ async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             pass  # job may not exist; harmless
 
-    await update.message.reply_text("🔔 Reminders resumed.")
+    await update.message.reply_text("🔔 Nhắc nhở đã được bật lại.")

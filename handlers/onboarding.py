@@ -57,14 +57,14 @@ async def handle_tz_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         with transaction() as cx:
             cx.execute("UPDATE users SET tz = ? WHERE tg_id = ?", (text, user.id))
         await update.message.reply_text(
-            f"✅ Timezone set to *{text}*. Your reminders will fire in local time.",
+            f"✅ Đã đặt múi giờ: *{text}*. Nhắc nhở của bạn sẽ hiển thị theo giờ địa phương.",
             parse_mode="Markdown",
         )
         log.info("User %s set timezone to %s", user.id, text)
     except Exception:
         await update.message.reply_text(
-            f"⚠️ I don't recognise *{text}* as a timezone — "
-            f"sticking with the default. You can always DM me a valid tz name later.",
+            f"⚠️ Mình không nhận ra *{text}* là múi giờ hợp lệ — "
+            f"giữ nguyên mặc định. Bạn có thể nhắn lại tên múi giờ bất cứ lúc nào.",
             parse_mode="Markdown",
         )
         log.debug("User %s sent invalid tz %r", user.id, text)
@@ -79,25 +79,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if fresh:
         await update.message.reply_text(
-            f"👋 Hi {user.first_name}, I'm your Soul Coach.\n\n"
-            "I'll check in on you for the things you want to stay on top of, "
-            "and answer questions whenever you need a hand.\n\n"
-            "Try:\n"
-            "• /addtask Morning meditation | 0 8 * * *\n"
-            "• /tasks — see your reminders\n"
-            "• /help — full command list\n"
-            "• Or just message me anything that's on your mind."
+            f"👋 Xin chào {user.first_name}, mình là Soul Coach của bạn.\n\n"
+            "Mình sẽ nhắc nhở bạn về những điều bạn muốn duy trì, "
+            "và luôn sẵn sàng lắng nghe khi bạn cần.\n\n"
+            "Thử ngay:\n"
+            "• /addtask Thiền buổi sáng | 0 8 * * *\n"
+            "• /tasks — xem nhắc nhở của bạn\n"
+            "• /help — danh sách lệnh đầy đủ\n"
+            "• Hoặc cứ nhắn bất cứ điều gì đang trong đầu bạn."
         )
         await update.message.reply_text(
-            "🕐 *What timezone are you in?*\n\n"
-            f"Common choices: {_COMMON_TZ}\n\n"
-            "_Reply with any valid tz name, e.g. `Asia/Ho_Chi_Minh`. "
-            "Just ignore this to keep the default._",
+            "🕐 *Bạn đang ở múi giờ nào?*\n\n"
+            f"Gợi ý: {_COMMON_TZ}\n\n"
+            "_Nhắn tên múi giờ hợp lệ, ví dụ `Asia/Ho_Chi_Minh`. "
+            "Bỏ qua nếu muốn giữ mặc định._",
             parse_mode="Markdown",
         )
         _awaiting_tz.add(user.id)
     else:
-        await update.message.reply_text("👋 Welcome back. Type /help to see what I can do.")
+        await update.message.reply_text("👋 Chào mừng trở lại! Nhắn /help để xem mình có thể làm gì cho bạn.")
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -107,22 +107,22 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
     user_cmds = (
-        "📋 *User commands*\n"
-        "/start — register\n"
-        "/tasks — list your reminders\n"
-        "/addtask <title> | <cron> — add reminder (cron is 5-field)\n"
-        "/removetask <id> — remove\n"
-        "/pause — mute reminders\n"
-        "/resume — unmute reminders\n"
-        "/talk\\_to\\_human — connect to a coach\n\n"
-        "_Or just type anything; I'll try to help._"
+        "📋 *Lệnh người dùng*\n"
+        "/start — đăng ký\n"
+        "/tasks — xem nhắc nhở\n"
+        "/addtask <tên> | <cron> — thêm nhắc nhở (cron 5 trường)\n"
+        "/removetask <id> — xóa nhắc nhở\n"
+        "/pause — tắt nhắc nhở\n"
+        "/resume — bật lại nhắc nhở\n"
+        "/talk\\_to\\_human — kết nối với coach con người\n\n"
+        "_Hoặc cứ nhắn bất cứ điều gì, mình sẽ cố giúp._"
     )
     sup_cmds = (
-        "\n\n👤 *Supervisor commands*\n"
-        "/users — list active users\n"
-        "/report — send weekly report now\n"
-        "/resolve <user\\_id> — close an escalation\n"
-        "/transcript <user\\_id> \\[YYYY-WW] — view verbatim history\n"
+        "\n\n👤 *Lệnh supervisor*\n"
+        "/users — danh sách người dùng\n"
+        "/report — gửi báo cáo tuần ngay\n"
+        "/resolve <user\\_id> — đóng escalation\n"
+        "/transcript <user\\_id> \\[YYYY-WW] — xem lịch sử hội thoại\n"
         "/kb\\_add <cat> | <q> | <a> | <kw>\n"
         "/kb\\_list \\[cat]\n"
         "/kb\\_edit <id> <field>=<value>\n"
