@@ -41,8 +41,20 @@ def init_db() -> None:
         _conn.executescript(f.read())
 
     log.info("DB initialized at %s", s.db_path)
+    _migrate()
     _maybe_seed_kb()
     _clear_stale_escalations()
+
+
+def _migrate() -> None:
+    """Idempotent column-adding migrations for existing DBs."""
+    cur = conn().execute("PRAGMA table_info(kb_entries)")
+    cols = {row[1] for row in cur.fetchall()}
+    if "status" not in cols:
+        conn().execute(
+            "ALTER TABLE kb_entries ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
+        )
+        log.info("Migration: added kb_entries.status column")
 
 
 def _clear_stale_escalations() -> None:

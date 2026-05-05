@@ -1,16 +1,17 @@
-# Soul Coach Telegram Bot — Specification (v2.5)
+# Soul Coach Telegram Bot — Specification (v2.6)
 
-> Final, locked-in spec after design discussion. Source of truth for implementation.
-> v2.1 adds: crisis filter, real pause/resume, /health endpoint, tz onboarding,
-> unit tests, CI, off-host backups.
+> Source of truth for implementation. Updated as features land.
+>
+> **v2.6** (current): Pending-review KB queue, dedup gate, auto-keyword extraction, multi-model + multi-key LLM failover with 5xx handling, offline empathy fallback, logrotate.
+> v2.5: Vietnamese KB + UI, /debug, /settask, escalation auto-clear, token optimization (~75% reduction), multi-key failover, typing indicator.
 
 ---
 
 ## 1. Purpose & Scope
 
-A proactive Telegram bot that acts as a mental coach: pings users for scheduled task check-ins, answers questions from a curated Knowledge Base (KB), tracks satisfaction, escalates to a human Supervisor (S) when it can't help, and DMs S a weekly aggregate report.
+A proactive Telegram bot that acts as a mental coach: pings users for scheduled task check-ins, answers from a curated Knowledge Base (KB), tracks satisfaction, escalates to a human Supervisor (S) when it can't help, and DMs S a weekly aggregate report.
 
-**Out of scope (v1):** real therapy, free-form unbounded LLM, multi-supervisor, voice/video, multi-language UI (EN+VI text-inference is in scope).
+**Out of scope (v1):** real therapy, free-form unbounded LLM, multi-supervisor, voice/video.
 
 ## 2. Actors
 
@@ -22,13 +23,12 @@ A proactive Telegram bot that acts as a mental coach: pings users for scheduled 
 
 ## 3. Tech Stack
 
-- `python-telegram-bot` v21+ (async)
-- `SQLite` via stdlib `sqlite3`
-- `APScheduler` (AsyncIOScheduler) for reminders + weekly report
-- `rapidfuzz` ≥ 3.11 for KB fuzzy matching (`token_set_ratio` scorer — see §11)
-- `google-generativeai` (Gemini Flash) for grounded RAG fallback
+- `python-telegram-bot` v21+ (async); `ChatAction` is in `telegram.constants`
+- `SQLite` via stdlib `sqlite3` (WAL mode, single shared connection)
+- `APScheduler` AsyncIOScheduler for reminders + weekly report
+- `rapidfuzz` ≥ 3.11 for KB fuzzy matching (`token_set_ratio` scorer — see §12)
+- `google-genai` (Gemini Flash) for grounded RAG fallback; `system_instruction` via `GenerateContentConfig`
 - `pytz` for timezone validation
-- KB stored in SQLite `kb_entries` table; managed by S via admin commands
 
 ## 4. Data Model
 
@@ -40,7 +40,7 @@ check_ins(id PK, task_id FK, user_id FK, sent_at, replied_at,
 interactions(id PK, user_id, ts, direction, text, intent,
              kb_match_id NULL, llm BOOLEAN, satisfied)    -- direction: in|out
 kb_entries(id PK, category, question, answer, keywords,
-           created_by, created_at, hits)
+           created_by, created_at, hits, status)          -- status: active|pending
 sessions(user_id PK, sat_counter, last_unsat_at,
          current_topic, escalated_at NULL)
 escalations(id PK, user_id, reason, context_json,
@@ -48,6 +48,8 @@ escalations(id PK, user_id, reason, context_json,
 reports(id PK, week_start, week_end, payload_json, sent_at)
 audit_log(id PK, ts, actor, action, target)
 ```
+
+**Migrations**: `db._migrate()` runs idempotently on boot. Currently adds `kb_entries.status` column for existing DBs.
 
 ## 5. State Machine (per user)
 
@@ -59,94 +61,73 @@ IDLE
  │     └─ 24h no reply ───────▶ MISSED ──▶ IDLE
  │
  └─ user msg ──▶
-       ├─ crisis keywords detected ──▶ safe-messaging reply (no escalation)
-       ├─ IN_QA
-       │     ├─ KB hit (score>=70) + 👍/positive ──▶ IDLE (counter=0)
-       │     ├─ KB hit + 👎/negative, counter<10 ────▶ IN_QA (counter++)
-       │     ├─ KB miss ──▶ Gemini RAG (empathetic, no KB restriction)
-       │     │     ├─ 👍/positive ─▶ IDLE (counter=0, auto-promote KB, notify S)
-       │     │     └─ 👎/negative ─▶ IN_QA (counter++)
-       │     └─ counter==10 ────────▶ ESCALATED
-       └─ tz onboarding reply ──▶ sets users.tz, IDLE
+       ├─ crisis keywords ──▶ safe-messaging reply (no escalation, no log_out)
+       ├─ ESCALATED ────────▶ wait-reminder (not silent)
+       ├─ tz onboarding ────▶ sets users.tz, IDLE
+       └─ IN_QA
+             ├─ KB hit (score ≥ 70 on ACTIVE entries) ──▶ direct answer + 👍/👎
+             │     ├─ 👍 → IDLE (counter=0)
+             │     └─ 👎 → counter++
+             └─ KB miss ──▶ Gemini RAG (model+key failover, offline fallback)
+                   ├─ 👍 → IDLE + auto-promote to KB as PENDING + DM S with Approve/Reject buttons
+                   └─ 👎 → counter++
+       counter ≥ 10 ──▶ ESCALATED
 
-ESCALATED ── S /resolve or auto-clear 24h ──▶ IDLE (counter=0)
-         └─ user messages while escalated ──▶ gentle wait-reminder (not silent)
+ESCALATED ── /resolve OR auto-clear after 24h ──▶ IDLE (counter=0)
 ```
 
 ## 6. Functional Modules
 
 ### 6.1 Onboarding
-`/start` registers the user and prompts for timezone. If the user replies with a
-valid IANA timezone name (validated with `pytz`), `users.tz` is updated.
-Invalid or missing reply is silently ignored; the default `DEFAULT_TZ` is kept.
-The tz prompt intercept lives in `handlers/onboarding.handle_tz_reply()` and
-is checked at the very top of the free-text message handler before KB lookup.
+`/start` registers user → prompts for timezone (validated with `pytz`). Invalid/missing reply keeps `DEFAULT_TZ`.
 
 ### 6.2 Proactive Reminders
-APScheduler fires per active task → bot sends ping with mood-scale inline keyboard (😣😕😐🙂😄) → waits up to 24h. At 12h: gentle nudge. At 24h: mark `missed`. On bot restart: scan pending check-ins older than window and mark `missed`; re-arm future jobs from `tasks` table.
-
-`/pause` now calls `scheduler().pause_job()` for each active task job in addition to flipping `users.status`. `/resume` calls `scheduler().resume_job()`. This prevents check-ins from firing while paused even if the bot restarts.
+APScheduler fires per active task → mood-scale inline keyboard (😣😕😐🙂😄). 12h nudge → 24h missed. `/pause` and `/resume` actually suspend/resume scheduler jobs (not just status flip).
 
 ### 6.3 Crisis Pre-filter
-Before any KB lookup or LLM call, `handlers/qa._is_crisis(text)` checks for a
-list of EN+VI suicide/self-harm keywords. On match, the bot sends a safe-messaging
-reply with crisis hotline numbers and returns immediately — no LLM is invoked,
-no escalation is triggered (the bot handles it directly).
+EN+VI keyword substring match before any LLM call. On match → safe-messaging reply with hotline; no escalation, no `log_out` row (so it doesn't pollute interaction history).
 
-Crisis keywords are defined in `handlers/qa._CRISIS_KEYWORDS`.
-
-### 6.4 Q&A / KB Lookup
-Free-text user message → normalize → `KBRetriever.search(query, top_k=5)` returning `[(entry, score)]`.
-- If `top1.score >= FUZZY_THRESHOLD (70)` → direct answer from KB.
-- Else → Gemini RAG (see 6.6).
+### 6.4 KB Retrieval
+- `kb.search()` filters `status = 'active'` → pending entries don't leak into matches.
+- `rapidfuzz.token_set_ratio` over `question + keywords`.
+- `top1.score ≥ FUZZY_THRESHOLD (65)` → direct answer + 👍/👎 + hit counter increment.
 
 ### 6.5 Satisfaction Counter (hybrid)
-- After every bot answer, append inline 👍 / 👎 buttons.
-- Free-text replies are also classified by `services.satisfaction.classify(text)` — keyword/regex rules in EN+VI:
-  - Positive: `thanks|got it|helped|that works|tốt|cảm ơn|hiểu rồi|ổn rồi`
-  - Negative: `still stuck|not really|doesn't help|didn't work|tried that|no|chưa được|không giúp|vẫn vậy`
-- `+1` to counter on negative; `0` on positive; no change on neutral.
-- Counter resets on positive, on topic change, after escalation, or after 24h of no Q&A.
+- Inline 👍/👎 buttons on every bot reply.
+- Free-text classified by `services.satisfaction.classify()` (EN+VI regex with word boundaries).
+- `+1` on negative; reset on positive; threshold = `SAT_THRESHOLD (10)`.
+- Reset on positive feedback, escalation, `/resolve`, or 24h idle.
 
 ### 6.6 Gemini RAG Fallback
-Triggered on KB miss. LLM is instructed to:
-- Reply in the user's detected language (VI or EN).
-- For emotional sharing: respond with empathy first, no hedging.
-- Use KB CONTEXT as reference; fall back to general wellness principles.
-- Max 120 words. Conversational tone.
+On KB miss:
+1. Show typing indicator (`ChatAction.TYPING`).
+2. Build minimal prompt: system_instruction (≈60 tokens, in `GenerateContentConfig`), top KB entries with score ≥ 40 (max 2, answer truncated to 100 chars), last 2 turns.
+3. **Failover chain**: for each model in `GEMINI_MODEL` (comma-separated list), for each key in `GEMINI_API_KEY` / `GEMINI_API_KEY_2` — try; on 429 / 5xx / empty / network error → continue. Default order: `gemini-2.5-flash-lite, gemini-2.5-flash, gemini-2.0-flash-lite, gemini-2.0-flash` = 8 attempts.
+4. **Offline empathy fallback**: when all attempts fail → bot still replies with a generic empathy template + `/talk_to_human` hint. Never silent.
+5. Log `usage_metadata` (input/output token count) per call.
+6. On 429 across the chain → DM S (rate-limited 1/10min); user still gets empathy template.
 
-Reply prefixed with `💡 Gợi ý từ Soul Coach:` + 👍/👎 buttons.
-No `parse_mode` — LLM text may have unbalanced markdown.
+`max_output_tokens=400`. No `parse_mode` for LLM text (avoids markdown parse errors on user-supplied content).
 
-- 👍 → reset counter + **auto-promote to KB** (category="general") + notify S via DM.
-- 👎 → `counter++`, ask for more context, keep trying. Escalate only when `counter >= SAT_THRESHOLD (10)`.
+### 6.7 Auto-KB Promotion (Pending Review Queue)
+When a user 👍s an LLM reply:
+1. **Dedup gate**: `kb.has_similar(question, threshold=75)` — if an active entry already covers it, skip silently.
+2. **Length gate**: skip if question < 4 chars.
+3. **Auto-extract keywords**: `kb.extract_keywords()` strips stopwords (VI+EN), keeps top 5 distinctive tokens.
+4. Insert with `status='pending'`, `category='general'`. **Pending entries are excluded from `kb.search()` until approved.**
+5. DM S with question + answer + extracted keywords + inline `✅ Approve` / `❌ Reject` buttons (callbacks: `kb_app:<id>` / `kb_rej:<id>`).
+6. S can also use `/kb_pending`, `/kb_approve <id> [category] [keywords]`, `/kb_reject <id>` from the chat.
 
-### 6.7 Escalation
-Three triggers, all produce a structured DM to S:
+This protects KB quality from drift and duplicates while still letting the bot learn over time.
 
-```
-🚨 Escalation — @username (uid 12345)
-Reason: kb_miss | counter | manual
-Last 5 turns:
-  U (10:01): ...
-  B (10:01): ...
-  ...
-[Take over]   [Mark resolved]
-```
+### 6.8 Escalation
+Three triggers (`kb_miss`, `counter`, `manual`) → DM S with last 5 turns + Resolve button. Re-escalation suppressed if already escalated; user gets wait-reminder instead.
 
-S can `/resolve <user_id>` to close. While escalated, bot stays silent on automated Q&A for that user (reminders still fire).
+### 6.9 Weekly Report
+Cron Sunday 18:00 (S timezone). Aggregates the past 7 days per user (compliance, mood trend, escalations) and globally (top KB hits, top KB misses, **pending KB count**). Markdown table + JSON attachment. Snippets redacted by default; verbatim view via `/transcript` (audit-logged).
 
-### 6.8 Weekly Report
-Cron Sunday 18:00 (S timezone). Aggregates the past 7 days:
-- Per-user: check-in compliance %, mood trend (avg), interaction count, escalations, kb_candidates pending promotion.
-- Aggregate: top KB hits, top KB misses, blocked users.
-- Format: markdown table in DM + JSON attachment (machine-readable archive).
-- Snippets are redacted by default (first 60 chars + hash). S can run `/transcript <user_id> <YYYY-WW>` to view verbatim — this is logged in `audit_log`.
-
-### 6.9 Health Endpoint
-`services/health.py` starts a daemon HTTP thread on `HEALTH_PORT` (default 8080).
-`GET /health` → `200 ok`. Suitable for UptimeRobot "HTTP" monitor.
-Started in `main.py` before the Telegram poller.
+### 6.10 Health & Monitoring
+`/health` HTTP endpoint on `HEALTH_PORT` (default 8080) for UptimeRobot. `/debug` supervisor command shows live snapshot: users, active+pending KB counts, open escalations, recent LLM replies.
 
 ## 7. Commands
 
@@ -155,21 +136,24 @@ Started in `main.py` before the Telegram poller.
 | `/start` | U | Register, onboarding + timezone prompt |
 | `/help` | U | Usage |
 | `/tasks` | U | List my reminders |
-| `/addtask <title> | <cron>` | U | Add reminder |
+| `/addtask <title> \| <cron>` | U | Add reminder |
 | `/removetask <id>` | U | Remove |
-| `/pause` `/resume` | U | Mute/unmute reminders (actually suspends scheduler jobs) |
+| `/pause`, `/resume` | U | Suspend/resume scheduler jobs |
 | `/talk_to_human` | U | Manual escalation |
 | `/report` | S | On-demand weekly report |
 | `/resolve <user_id>` | S | Close escalation |
 | `/transcript <user_id> [YYYY-WW]` | S | View verbatim history |
 | `/users` | S | Active user list |
-| `/kb_add <cat> | <q> | <a> | <kw>` | S | Add KB entry |
+| `/settask <user_id> \| <title> \| <cron>` | S | Assign reminder to a user |
+| `/kb_add <cat> \| <q> \| <a> \| <kw>` | S | Add active KB entry |
 | `/kb_list [cat]` | S | Browse |
 | `/kb_edit <id> <field>=<value>` | S | Update entry |
 | `/kb_del <id>` | S | Delete entry |
-| `/kb_promote <interaction_id>` | S | Manually promote LLM reply to KB |
-| `/debug` | S | Live status: users, escalations, recent errors |
-| `/settask <user_id> | <title> | <cron>` | S | Assign reminder to a user |
+| `/kb_pending` | S | List entries awaiting review |
+| `/kb_approve <id> [category] [keywords]` | S | Promote pending → active |
+| `/kb_reject <id>` | S | Delete pending entry |
+| `/kb_promote <interaction_id>` | S | Manually promote a past LLM reply |
+| `/debug` | S | Live status snapshot |
 
 ## 8. Configuration (env vars)
 
@@ -177,93 +161,91 @@ Started in `main.py` before the Telegram poller.
 |---|---|---|
 | `TELEGRAM_TOKEN` | — | required |
 | `SUPERVISOR_CHAT_ID` | — | required |
-| `GEMINI_API_KEY` | — | required for RAG fallback |
-| `GEMINI_MODEL` | `gemini-1.5-flash` | |
+| `GEMINI_API_KEY` | — | required |
+| `GEMINI_API_KEY_2` | empty | optional 2nd-account failover |
+| `GEMINI_MODEL` | `gemini-2.5-flash-lite,gemini-2.5-flash,gemini-2.0-flash-lite,gemini-2.0-flash` | comma-separated failover chain |
 | `DB_PATH` | `data/soul_coach.db` | |
-| `DEFAULT_TZ` | `Asia/Ho_Chi_Minh` | fallback if user doesn't set tz |
+| `DEFAULT_TZ` | `Asia/Ho_Chi_Minh` | |
 | `REMINDER_NUDGE_HOURS` | `12` | |
 | `REMINDER_MISS_HOURS` | `24` | |
 | `REPORT_CRON` | `0 18 * * SUN` | S timezone |
-| `FUZZY_THRESHOLD` | `70` | rapidfuzz token_set_ratio scale 0–100 |
-| `SAT_THRESHOLD` | `10` | LLM tries up to 10 times before escalating |
+| `FUZZY_THRESHOLD` | `65` | rapidfuzz 0–100 |
+| `SAT_THRESHOLD` | `10` | LLM tries before escalating |
 | `LOG_LEVEL` | `INFO` | |
-| `HEALTH_PORT` | `8080` | HTTP health-check port |
+| `HEALTH_PORT` | `8080` | |
 
-## 9. Edge Cases & Reliability
+## 9. Reliability & Continuous Operation
 
-- Telegram 429: exponential backoff via PTB built-in.
-- DB writes wrapped in transactions; SQLite WAL mode enabled.
-- KB writes are atomic; in-memory cache invalidated on every write.
-- APScheduler jobs idempotent (keyed by `task_id + scheduled_for`).
-- Bot restart recovers pending check-ins (mark missed if past window).
-- User blocks bot → `Forbidden` caught → `users.status='blocked'` → scheduler skips.
-- Crisis keywords handled before any LLM call; no escalation triggered.
-- Stale escalations (>24h open) auto-cleared on bot restart via `db._clear_stale_escalations()`.
-- Escalated users receive a gentle wait-reminder instead of complete silence.
-- Quota errors (Gemini 429) trigger supervisor DM (rate-limited to 1/10min); user gets friendly fallback.
-- Token usage logged per call (usage_metadata); multi-key failover on quota exhaustion.
+**Failure modes covered:**
 
-## 10. Deployment (Oracle Always Free)
+| Failure | Behavior |
+|---|---|
+| Single key 429 quota | Failover to next key |
+| All keys 429 on one model | Failover to next model in `GEMINI_MODEL` |
+| Model 5xx (server overload) | Failover to next key/model |
+| Empty response (safety filter) | Failover to next key/model |
+| Network timeout | Failover to next key/model |
+| All 8 attempts fail | Offline empathy template + `/talk_to_human` hint |
+| Telegram 429 | PTB built-in exponential backoff |
+| User blocks bot | `Forbidden` caught → `users.status='blocked'` |
+| Stale escalation > 24h | Auto-cleared on boot via `db._clear_stale_escalations()` |
+| Pending check-ins on restart | Marked `missed` if past window |
+| Crisis keywords | Handled before LLM; no escalation, no log_out |
+| Disk-full / log growth | Logrotate weekly, keep 4 (see `deploy/soul-coach.logrotate`) |
 
-- Shape: **Ampere A1 Flex**, 2 OCPU / 12 GB RAM (Always-Free eligible).
-- OS: Ubuntu 22.04 LTS.
-- Process supervisor: `systemd` unit `soul-coach.service`.
-- Anti-idle-reclamation: `keepalive.timer` runs `keepalive.sh` every 5 minutes (60s of light CPU + DB housekeeping). Targets ~20% utilization rate so 95th-percentile CPU stays above the 20% idle threshold.
-- Backups: nightly local SQLite snapshot + off-host upload via `rclone` (`deploy/backup_offhost.sh`).
-- Monitoring: UptimeRobot (free) hitting `GET /health` on port 8080.
-- **Never click "Upgrade to Pay-As-You-Go".** Set $0.01 budget alert as guardrail. Log into console monthly to prevent account abandonment.
+**Token budget per LLM call** (target ~650 total):
+- system: ~60 (cached if eligible)
+- KB context: ≤ 2 entries × 50 = 100
+- history: 2 turns × 30 = 60
+- user query: ~30
+- max output: 400
 
-See `deploy/ORACLE_DEPLOY.md` for step-by-step.
+At `gemini-2.5-flash-lite` free tier (1500 RPD/project): ~975K tokens/day per model per account. With 4 models × 2 accounts = ~12 000 calls/day theoretical capacity.
+
+**Memory bounds**: KB entries cached in-process (single shared list). At 1000 active entries ≈ 500 KB heap; fuzzy search O(N) ≈ 5 ms. Pending entries excluded from cache match step.
+
+## 10. Deployment (GCP e2-micro Always Free)
+
+- Instance: `soul-coach`, zone `us-central1-a`, user `hallo_5ambloom`.
+- Service: systemd `soul-coach.service`. Logs in `/home/hallo_5ambloom/Bot_The_Soul_Coach/logs/bot.err.log`.
+- Logrotate: install `deploy/soul-coach.logrotate` to `/etc/logrotate.d/soul-coach` for weekly rotation, 4-week retention.
+- Health: UptimeRobot pings `:8080/health`.
+- Backups: `deploy/backup_offhost.sh` via rclone (cron nightly).
+- Monitoring tail: `sudo tail -f logs/bot.err.log | grep -E 'tokens|429|error'`.
+
+See `deploy/GCP_DEPLOY.md` for step-by-step.
 
 ## 11. Project Layout
 
 ```
 Bot_The_Soul_Coach/
-├── SPEC.md                  ← this file
-├── README.md
-├── TESTPLAN.md              ← test strategy and checklists
-├── HANDOFF.md
-├── requirements.txt
-├── .env.example
-├── .gitignore
-├── config.py
-├── main.py
-├── schema.sql
-├── kb_seed.yaml
-├── db.py
+├── SPEC.md TESTPLAN.md README.md HANDOFF.md
+├── requirements.txt .env.example .gitignore
+├── config.py main.py schema.sql kb_seed.yaml db.py
 ├── handlers/
-│   ├── onboarding.py        ← /start + timezone prompt
-│   ├── tasks.py             ← /addtask /removetask /pause(fixed) /resume(fixed)
-│   ├── qa.py                ← crisis filter + tz intercept + KB/LLM pipeline
-│   ├── escalation.py
-│   └── admin.py
+│   ├── onboarding.py    /start, tz prompt, /help
+│   ├── tasks.py         /addtask /removetask /pause /resume /tasks
+│   ├── qa.py            crisis filter, KB→LLM pipeline, auto-pending KB
+│   ├── escalation.py    /talk_to_human, /resolve, callbacks
+│   └── admin.py         /report /users /transcript /kb_* /settask /debug
 ├── services/
-│   ├── kb.py
-│   ├── llm.py
+│   ├── kb.py            CRUD + status filter + dedup + keyword extraction
+│   ├── llm.py           multi-model + multi-key failover
 │   ├── satisfaction.py
 │   ├── reminders.py
 │   ├── reports.py
-│   └── health.py            ← /health HTTP daemon thread
-├── utils/
-│   └── timez.py
+│   └── health.py
 ├── deploy/
-│   ├── ORACLE_DEPLOY.md
-│   ├── soul-coach.service
-│   ├── keepalive.service
-│   ├── keepalive.timer
-│   ├── keepalive.sh
-│   └── backup_offhost.sh    ← rclone off-host backup
-├── .github/
-│   └── workflows/
-│       └── ci.yml           ← smoke + unit on every push
-└── tests/
-    ├── test_smoke.py
-    └── test_unit.py         ← 16 unit tests, no credentials needed
+│   ├── GCP_DEPLOY.md ORACLE_DEPLOY.md
+│   ├── soul-coach.service soul-coach-gcp.service
+│   ├── soul-coach.logrotate           ← weekly rotation
+│   ├── keepalive.{service,timer,sh}
+│   ├── backup_offhost.sh
+│   └── migrate_vi_qa.py migrate_vi_keywords.py
+├── .github/workflows/ci.yml
+└── tests/test_smoke.py test_unit.py
 ```
 
 ## 12. Known Scorer Gotcha
 
-**Do NOT use `rapidfuzz.WRatio` for KB retrieval.** It returns 85+ even for
-completely unrelated queries. Use **`token_set_ratio`** (scores 90–100 for
-genuine matches, 30–50 for unrelated queries). Threshold of 70 correctly routes
-obscure queries to the LLM fallback. Enforced in `services/kb.py`.
+**Do NOT use `rapidfuzz.WRatio`.** Returns 85+ for unrelated queries. Use `token_set_ratio` (90–100 for genuine matches, 30–50 for unrelated). Threshold 65 with Vietnamese KB. Enforced in `services/kb.py`.

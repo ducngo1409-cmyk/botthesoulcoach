@@ -129,6 +129,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/kb\\_list \\[cat]\n"
         "/kb\\_edit <id> <field>=<value>\n"
         "/kb\\_del <id>\n"
+        "/kb\\_pending — xem entries chờ duyệt\n"
+        "/kb\\_approve <id> \\[cat] \\[kw] — duyệt entry\n"
+        "/kb\\_reject <id> — từ chối entry\n"
         "/kb\\_promote <interaction\\_id>"
     )
     text = user_cmds + (sup_cmds if is_supervisor else "")

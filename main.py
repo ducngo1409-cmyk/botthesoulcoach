@@ -63,6 +63,9 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("kb_edit", admin.kb_edit))
     app.add_handler(CommandHandler("kb_del", admin.kb_del))
     app.add_handler(CommandHandler("kb_promote", admin.kb_promote))
+    app.add_handler(CommandHandler("kb_pending", admin.kb_pending))
+    app.add_handler(CommandHandler("kb_approve", admin.kb_approve))
+    app.add_handler(CommandHandler("kb_reject", admin.kb_reject))
     app.add_handler(CommandHandler("settask", admin.settask))
     app.add_handler(CommandHandler("debug", admin.debug_cmd))
 
@@ -70,6 +73,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(reminders.mood_callback, pattern=r"^mood:"))
     app.add_handler(CallbackQueryHandler(qa.feedback_callback, pattern=r"^sat:"))
     app.add_handler(CallbackQueryHandler(escalation.resolve_callback, pattern=r"^resolve:"))
+    app.add_handler(CallbackQueryHandler(admin.kb_review_callback, pattern=r"^kb_(app|rej):"))
 
     # --- Free-text messages (must be last) ---
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, qa.on_user_message))

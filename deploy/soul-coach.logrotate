@@ -1,0 +1,10 @@
+/home/hallo_5ambloom/Bot_The_Soul_Coach/logs/*.log {
+    weekly
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su hallo_5ambloom hallo_5ambloom
+}

@@ -31,7 +31,8 @@ async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     escalated = conn().execute(
         "SELECT user_id FROM sessions WHERE escalated_at IS NOT NULL"
     ).fetchall()
-    kb_count = conn().execute("SELECT COUNT(*) AS n FROM kb_entries").fetchone()["n"]
+    kb_count = conn().execute("SELECT COUNT(*) AS n FROM kb_entries WHERE status = 'active'").fetchone()["n"]
+    kb_pending_count = conn().execute("SELECT COUNT(*) AS n FROM kb_entries WHERE status = 'pending'").fetchone()["n"]
     open_esc = conn().execute(
         "SELECT user_id, reason, sent_to_s_at FROM escalations "
         "WHERE resolved_at IS NULL ORDER BY sent_to_s_at DESC LIMIT 5"
@@ -43,7 +44,7 @@ async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     lines = ["🔧 *Bot Debug Snapshot*\n"]
     lines.append(f"👥 Users: {users}")
-    lines.append(f"📚 KB entries: {kb_count}")
+    lines.append(f"📚 KB active: {kb_count} | pending: {kb_pending_count}")
     lines.append(f"🔴 Escalated sessions: {len(escalated)}")
     if escalated:
         for r in escalated:
@@ -309,6 +310,93 @@ async def settask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     except Exception:
         log.warning("Could not notify user %s about new task", user_id)
+
+
+async def kb_pending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List all pending KB entries awaiting supervisor approval."""
+    if not _is_supervisor(update):
+        return
+    pending = kb.list_pending()
+    if not pending:
+        await update.message.reply_text("✨ Không có entry nào đang chờ duyệt.")
+        return
+    lines = [f"📋 *KB pending ({len(pending)})*\n"]
+    for e in pending:
+        lines.append(
+            f"#{e.id} — {e.question[:80]}\n"
+            f"  → {e.answer[:80]}{'…' if len(e.answer) > 80 else ''}\n"
+            f"  /kb\\_approve {e.id}    /kb\\_reject {e.id}\n"
+        )
+    text = "\n".join(lines)
+    if len(text) > 3500:
+        text = text[:3500] + "\n…(truncated)"
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def kb_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/kb_approve <id> [category] [keywords] — promote a pending entry."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/kb_approve <id> [category] [keywords]`", parse_mode="Markdown"
+        )
+        return
+    try:
+        entry_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("id must be a number.")
+        return
+    category = context.args[1] if len(context.args) > 1 else None
+    keywords = " ".join(context.args[2:]) if len(context.args) > 2 else None
+    ok = kb.approve(entry_id, category=category, keywords=keywords)
+    await update.message.reply_text(
+        f"✅ Approved KB #{entry_id}." if ok else "Not found or already active."
+    )
+
+
+async def kb_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/kb_reject <id> — delete a pending entry."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/kb_reject <id>`", parse_mode="Markdown"
+        )
+        return
+    try:
+        entry_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("id must be a number.")
+        return
+    ok = kb.delete(entry_id)
+    await update.message.reply_text(
+        f"🗑 Rejected KB #{entry_id}." if ok else "Not found."
+    )
+
+
+async def kb_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inline button on pending-KB notification: ✅ Approve / ❌ Reject."""
+    if not _is_supervisor(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    try:
+        action, entry_id = query.data.split(":")
+        entry_id = int(entry_id)
+    except Exception:
+        return
+    if action == "kb_app":
+        ok = kb.approve(entry_id)
+        msg = f"✅ Approved KB #{entry_id}" if ok else f"KB #{entry_id} not pending"
+    else:
+        ok = kb.delete(entry_id)
+        msg = f"🗑 Rejected KB #{entry_id}" if ok else f"KB #{entry_id} not found"
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.edit_message_text(query.message.text + f"\n\n{msg}")
+    except Exception:
+        await context.bot.send_message(settings().supervisor_chat_id, msg)
 
 
 async def kb_promote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

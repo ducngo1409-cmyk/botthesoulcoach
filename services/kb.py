@@ -36,6 +36,7 @@ class KBEntry:
     answer: str
     keywords: str
     hits: int = 0
+    status: str = "active"  # active | pending
 
 
 # --- Cache ---------------------------------------------------------------
@@ -46,7 +47,7 @@ _cache: List[KBEntry] | None = None
 
 def _load_cache() -> List[KBEntry]:
     rows = conn().execute(
-        "SELECT id, category, question, answer, keywords, hits "
+        "SELECT id, category, question, answer, keywords, hits, status "
         "FROM kb_entries ORDER BY id"
     ).fetchall()
     return [KBEntry(**dict(r)) for r in rows]
@@ -69,23 +70,85 @@ def invalidate_cache() -> None:
 # --- CRUD ----------------------------------------------------------------
 
 def add(category: str, question: str, answer: str, keywords: str,
-        created_by: Optional[int] = None) -> int:
+        created_by: Optional[int] = None, status: str = "active") -> int:
     with transaction() as cx:
         cur = cx.execute(
-            "INSERT INTO kb_entries (category, question, answer, keywords, created_by) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO kb_entries "
+            "(category, question, answer, keywords, created_by, status) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (category.strip(), question.strip(), answer.strip(),
-             keywords.strip(), created_by),
+             keywords.strip(), created_by, status),
         )
         new_id = cur.lastrowid
     invalidate_cache()
-    log.info("KB add: id=%s category=%s by=%s", new_id, category, created_by)
+    log.info("KB add: id=%s status=%s category=%s by=%s",
+             new_id, status, category, created_by)
     return new_id
+
+
+def approve(entry_id: int, category: Optional[str] = None,
+            keywords: Optional[str] = None) -> bool:
+    """Promote a pending entry to active. Optionally update category/keywords."""
+    sets = ["status = 'active'"]
+    params: list = []
+    if category:
+        sets.append("category = ?"); params.append(category.strip())
+    if keywords is not None:
+        sets.append("keywords = ?"); params.append(keywords.strip())
+    params.append(entry_id)
+    with transaction() as cx:
+        cur = cx.execute(
+            f"UPDATE kb_entries SET {', '.join(sets)} WHERE id = ? AND status = 'pending'",
+            params,
+        )
+        ok = cur.rowcount > 0
+    invalidate_cache()
+    return ok
+
+
+def list_pending() -> List[KBEntry]:
+    rows = conn().execute(
+        "SELECT id, category, question, answer, keywords, hits, status "
+        "FROM kb_entries WHERE status = 'pending' ORDER BY id"
+    ).fetchall()
+    return [KBEntry(**dict(r)) for r in rows]
+
+
+def has_similar(question: str, threshold: float = 75.0) -> Optional[Tuple[KBEntry, float]]:
+    """Check if an active entry already covers this question (dedup gate)."""
+    res = search(question, top_k=1)
+    if res and res[0][1] >= threshold:
+        return res[0]
+    return None
+
+
+def extract_keywords(text: str, max_kw: int = 5) -> str:
+    """Cheap keyword extraction: lowercase, drop stopwords, keep distinctive tokens."""
+    import re
+    stop_vi = {
+        "tôi", "bạn", "mình", "là", "có", "không", "thì", "mà", "và", "hay",
+        "với", "của", "cho", "đi", "đã", "đang", "sẽ", "nhé", "à", "ạ",
+        "này", "đó", "đây", "nào", "gì", "sao", "vậy", "rồi", "ơi",
+    }
+    stop_en = {
+        "the", "a", "an", "is", "are", "i", "you", "to", "of", "and", "or",
+        "in", "on", "at", "do", "does", "did", "be", "been", "being", "have",
+        "has", "had", "but", "if", "how", "what", "why", "when", "where",
+    }
+    tokens = re.findall(r"[a-zA-ZÀ-ỹà-ỹ]+", text.lower())
+    seen, out = set(), []
+    for t in tokens:
+        if len(t) < 2 or t in stop_vi or t in stop_en or t in seen:
+            continue
+        seen.add(t); out.append(t)
+        if len(out) >= max_kw:
+            break
+    return ", ".join(out)
 
 
 def get(entry_id: int) -> Optional[KBEntry]:
     row = conn().execute(
-        "SELECT id, category, question, answer, keywords, hits "
+        "SELECT id, category, question, answer, keywords, hits, status "
         "FROM kb_entries WHERE id = ?", (entry_id,),
     ).fetchone()
     return KBEntry(**dict(row)) if row else None
@@ -94,12 +157,12 @@ def get(entry_id: int) -> Optional[KBEntry]:
 def list_all(category: Optional[str] = None) -> List[KBEntry]:
     if category:
         rows = conn().execute(
-            "SELECT id, category, question, answer, keywords, hits "
+            "SELECT id, category, question, answer, keywords, hits, status "
             "FROM kb_entries WHERE category = ? ORDER BY id", (category,),
         ).fetchall()
     else:
         rows = conn().execute(
-            "SELECT id, category, question, answer, keywords, hits "
+            "SELECT id, category, question, answer, keywords, hits, status "
             "FROM kb_entries ORDER BY category, id"
         ).fetchall()
     return [KBEntry(**dict(r)) for r in rows]
@@ -142,10 +205,10 @@ def _haystack(e: KBEntry) -> str:
 
 
 def search(query: str, top_k: int = 5) -> List[Tuple[KBEntry, float]]:
-    """Return top-K (entry, score) pairs. Score is rapidfuzz 0..100."""
+    """Return top-K (entry, score) pairs. Only searches active entries."""
     if not query.strip():
         return []
-    entries = _ensure_cache()
+    entries = [e for e in _ensure_cache() if e.status == "active"]
     if not entries:
         return []
 

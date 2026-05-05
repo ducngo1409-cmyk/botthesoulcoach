@@ -233,30 +233,49 @@ async def _handle_quota_error(context, user_id: int, detail: str) -> None:
 
 # --- Auto KB promotion ---------------------------------------------------
 
-def _promote_to_kb(bot_reply: str, user_id: int, interaction_id: int) -> tuple[int, str]:
-    """Insert KB entry, update interaction. Returns (new_kb_id, question)."""
+def _promote_to_kb(bot_reply: str, user_id: int, interaction_id: int) -> tuple[int, str, str] | None:
+    """Insert KB entry as PENDING (needs supervisor approval before search uses it).
+
+    Skips if a similar active entry already exists (dedup).
+    Auto-extracts keywords from the user question for future matching.
+
+    Returns (new_kb_id, question, dup_reason). dup_reason is empty on success,
+    or describes why we skipped. Returns None when skipped entirely.
+    """
     user_msg = conn().execute(
         "SELECT text FROM interactions "
         "WHERE user_id = ? AND id < ? AND direction = 'in' "
         "ORDER BY id DESC LIMIT 1",
         (user_id, interaction_id),
     ).fetchone()
-    question = user_msg["text"] if user_msg else "(unknown)"
+    question = user_msg["text"] if user_msg else ""
+    if not question or len(question) < 4:
+        return None
 
+    # Dedup: skip if an active entry already covers this question well.
+    similar = kb.has_similar(question, threshold=75.0)
+    if similar:
+        existing, score = similar
+        log.info("Auto-promote skipped: KB #%s already covers (score=%.0f)",
+                 existing.id, score)
+        return None
+
+    keywords = kb.extract_keywords(question)
     new_id = kb.add(
         category="general",
         question=question,
         answer=bot_reply,
-        keywords="",
+        keywords=keywords,
         created_by=None,
+        status="pending",
     )
     with transaction() as cx:
         cx.execute(
             "UPDATE interactions SET kb_match_id = ? WHERE id = ?",
             (new_id, interaction_id),
         )
-    log.info("Auto-promoted interaction %s to KB #%s", interaction_id, new_id)
-    return new_id, question
+    log.info("Auto-promoted interaction %s to KB #%s (pending)", interaction_id, new_id)
+    return new_id, question, keywords
 
 
 # --- Feedback button callback -------------------------------------------
@@ -289,22 +308,31 @@ async def feedback_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             chat_id=user_id, text="🌟 Vui vì mình giúp được bạn!"
         )
 
-        # Auto-promote LLM reply to KB and notify supervisor
+        # Auto-promote LLM reply to KB as PENDING and notify supervisor.
+        # Pending entries are NOT used in search until supervisor approves —
+        # this protects KB quality from drift and duplicates.
         if is_llm and row:
-            new_kb_id, question = _promote_to_kb(row["text"], user_id, interaction_id)
-            s = settings()
-            try:
-                await context.bot.send_message(
-                    chat_id=s.supervisor_chat_id,
-                    text=(
-                        f"📚 Bot vừa học câu trả lời mới (KB #{new_kb_id}).\n"
-                        f"Câu hỏi: {question[:120]}\n\n"
-                        f"/kb_edit {new_kb_id} category=<cat> để phân loại\n"
-                        f"/kb_edit {new_kb_id} keywords=<kw> để thêm từ khóa"
-                    ),
-                )
-            except Exception:
-                log.warning("Could not notify supervisor about KB #%s", new_kb_id)
+            result = _promote_to_kb(row["text"], user_id, interaction_id)
+            if result:
+                new_kb_id, question, keywords = result
+                s = settings()
+                approve_kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Approve", callback_data=f"kb_app:{new_kb_id}"),
+                    InlineKeyboardButton("❌ Reject", callback_data=f"kb_rej:{new_kb_id}"),
+                ]])
+                try:
+                    await context.bot.send_message(
+                        chat_id=s.supervisor_chat_id,
+                        text=(
+                            f"📚 KB pending #{new_kb_id} — chờ duyệt\n\n"
+                            f"❓ {question[:200]}\n\n"
+                            f"🤖 {row['text'][:300]}\n\n"
+                            f"🔑 keywords: {keywords or '(none)'}"
+                        ),
+                        reply_markup=approve_kb,
+                    )
+                except Exception:
+                    log.warning("Could not notify supervisor about KB #%s", new_kb_id)
         return
 
     # 👎

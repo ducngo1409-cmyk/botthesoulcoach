@@ -53,11 +53,13 @@ CREATE TABLE IF NOT EXISTS kb_entries (
     question    TEXT NOT NULL,
     answer      TEXT NOT NULL,
     keywords    TEXT NOT NULL DEFAULT '',    -- comma-separated
-    created_by  INTEGER,                     -- supervisor tg_id
+    created_by  INTEGER,                     -- supervisor tg_id (NULL = bot auto-promote)
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    hits        INTEGER NOT NULL DEFAULT 0
+    hits        INTEGER NOT NULL DEFAULT 0,
+    status      TEXT NOT NULL DEFAULT 'active'  -- active|pending (pending = not used in search until approved)
 );
 CREATE INDEX IF NOT EXISTS idx_kb_category ON kb_entries(category);
+CREATE INDEX IF NOT EXISTS idx_kb_status ON kb_entries(status);
 
 CREATE TABLE IF NOT EXISTS sessions (
     user_id        INTEGER PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,

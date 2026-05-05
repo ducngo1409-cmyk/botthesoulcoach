@@ -1,4 +1,4 @@
-# Soul Coach Bot — Test Plan (v2.5)
+# Soul Coach Bot — Test Plan (v2.6)
 
 Two automated test suites cover all logic that doesn't require live credentials.
 Manual integration tests are listed for first-run verification before going to production.
@@ -9,192 +9,179 @@ Manual integration tests are listed for first-run verification before going to p
 
 ### 1.1 Smoke tests — `tests/test_smoke.py`
 
-Verifies the project can be imported, DB schema is correct, and core services
-behave as expected.  Requires only the project venv — no Telegram token or
-Gemini API key.
-
-**What it covers:**
-
 | # | Check |
 |---|---|
 | 1 | All modules import without error |
-| 2 | `db.init_db()` creates 10 tables |
-| 3 | KB seed loads correctly (≥ 8 entries) |
-| 4 | KB search — positive hit: `"I can't focus today"` → `focus` entry, score ≥ 70 |
-| 5 | KB search — three obscure off-topic queries each score < 70 (miss → LLM path) |
-| 6 | `satisfaction.classify` — 5 cases EN+VI (positive / negative / neutral) |
+| 2 | `db.init_db()` creates 10 tables; `_migrate()` adds `kb_entries.status` if missing |
+| 3 | KB seed loads ≥ 8 entries, all `status='active'` |
+| 4 | KB search — Vietnamese hit cases each score ≥ 65 |
+| 5 | KB search — three obscure off-topic queries each score < 65 |
+| 6 | `satisfaction.classify` — 5 cases EN+VI |
 | 7 | Satisfaction counter increment / reset cycle |
 | 8 | KB CRUD round-trip: add → get → edit → delete |
-| 9 | Cron expression validation (valid + invalid inputs) |
-
-**Run:**
+| 9 | Cron expression validation |
+| 10 | `kb.search()` ignores `status='pending'` entries |
+| 11 | `kb.has_similar()` returns existing entry above threshold |
+| 12 | `kb.extract_keywords()` strips VI+EN stopwords |
+| 13 | `kb.approve()` flips pending → active and updates cache |
 
 ```bash
-cd Bot_The_Soul_Coach
-source .venv/bin/activate
 python -m tests.test_smoke
 ```
 
-Expected output ends with: `✅ ALL SMOKE TESTS PASSED`
-
----
-
 ### 1.2 Unit tests — `tests/test_unit.py`
-
-Tests the five features added in v2.1 using mocked Telegram objects and a
-temp SQLite DB. No live credentials required.
-
-**What it covers:**
 
 | Class | Tests |
 |---|---|
-| `TestCrisisFilter` | `_is_crisis()` matches EN+VI keywords; non-crisis text returns False |
-| `TestCrisisHandler` | Crisis message → safe-messaging reply, `soft_reply` NOT called; non-crisis → KB called |
-| `TestHealthEndpoint` | `GET /health` → HTTP 200 + body `ok`; unknown path → 404 |
-| `TestTimezonePrompt` | New user gets tz prompt + `_awaiting_tz` set; returning user gets no prompt |
-| `TestTimezonePrompt` | Valid tz reply updates `users.tz` in DB and clears flag |
-| `TestTimezonePrompt` | Invalid tz reply clears flag and sends warning message |
-| `TestReminderCore` | `_mark_missed` sets status=`missed`; does NOT overwrite status=`answered` |
-| `TestReminderCore` | `_send_checkin` skips users with status=`paused` (no bot.send_message call) |
-| `TestReminderCore` | `_send_checkin` creates a `check_ins` row for active users |
-| `TestPauseResume` | `/pause` sets `users.status='paused'` AND calls `scheduler().pause_job()` |
-| `TestPauseResume` | `/resume` sets `users.status='active'` AND calls `scheduler().resume_job()` |
-
-**Run:**
+| `TestCrisisFilter` | EN+VI matches; non-crisis returns False |
+| `TestCrisisHandler` | Crisis reply skips LLM; non-crisis reaches KB |
+| `TestHealthEndpoint` | `GET /health` → 200 `ok`; unknown → 404 |
+| `TestTimezonePrompt` | New user prompted; valid tz → DB updated; invalid → warning |
+| `TestReminderCore` | `_mark_missed` only on pending; paused users skipped; check_ins row created for active |
+| `TestPauseResume` | `/pause` flips status AND `pause_job`; `/resume` mirrors |
+| `TestLLMFailover` | 429 on key 0 → key 1 attempted; 5xx triggers failover; empty response triggers failover; all-fail raises `LLMQuotaError` if any 429 else `LLMError` |
+| `TestKBPending` | Auto-promote inserts `status='pending'`; pending excluded from `search()`; dedup gate skips on similar match; approve flips to active |
 
 ```bash
-cd Bot_The_Soul_Coach
-source .venv/bin/activate
 python -m tests.test_unit
 ```
 
-Expected output ends with: `OK` and `Ran 16 tests`.
-
----
-
-### 1.3 Run both suites together
+### 1.3 Run both
 
 ```bash
-cd Bot_The_Soul_Coach
-source .venv/bin/activate
 python -m tests.test_smoke && python -m tests.test_unit
 ```
 
-Both must pass before any push to `main`.
+### 1.4 CI
+
+`.github/workflows/ci.yml` runs both jobs on every push/PR using Python 3.13.
 
 ---
 
-### 1.4 CI (GitHub Actions)
-
-`.github/workflows/ci.yml` runs both suites on every push and pull request
-using Python 3.11 (stable, fully supported by all dependencies).
-
-The workflow has two parallel jobs:
-
-| Job | Command |
-|---|---|
-| `smoke` | `python -m tests.test_smoke` |
-| `unit` | `python -m tests.test_unit` |
-
-Status badges appear on the GitHub repo page once the repo is pushed.
-
----
-
-## 2. Manual integration tests (requires live credentials)
-
-These cannot be automated without real Telegram + Gemini keys.
-Run them once before declaring the bot production-ready.
+## 2. Manual integration tests (live credentials)
 
 ### Setup
 
 ```bash
 cp .env.example .env
-# Fill in: TELEGRAM_TOKEN, SUPERVISOR_CHAT_ID, GEMINI_API_KEY
-source .venv/bin/activate
+# Fill TELEGRAM_TOKEN, SUPERVISOR_CHAT_ID, GEMINI_API_KEY (and optional GEMINI_API_KEY_2)
 python main.py
 ```
 
-### Checklist
+### 2.1 Bot startup
+- [ ] Bot starts; `logs/` dir created
+- [ ] `GET :8080/health` → `200 ok`
+- [ ] DB at `data/soul_coach.db`; `_migrate()` log line shows if column added
 
-#### 2.1 Bot startup
-- [ ] Bot starts without error; `logs/` directory created
-- [ ] `GET http://localhost:8080/health` returns `200 ok`
-- [ ] DB created at `data/soul_coach.db`
+### 2.2 Onboarding
+- [ ] `/start` → welcome + tz prompt
+- [ ] `Asia/Tokyo` → confirmation
+- [ ] `/start` again → welcome-back, no tz prompt
 
-#### 2.2 Onboarding
-- [ ] `/start` → welcome message + timezone prompt
-- [ ] Reply with `Asia/Tokyo` → confirmation `Đã đặt múi giờ: Asia/Tokyo`
-- [ ] `/start` again (returning user) → single welcome-back message, no tz prompt
+### 2.3 KB Q&A
+- [ ] `tôi không tập trung được` → KB direct answer + 👍/👎
+- [ ] 👍 → `🌟 Vui vì mình giúp được bạn!`
+- [ ] Obscure question → LLM reply with `💡 Gợi ý từ Soul Coach:` prefix
+- [ ] Emotional sharing (e.g. "thời tiết âm u quá tôi cũng thấy buồn") → empathetic LLM response
+- [ ] 👎 nine times → bot keeps trying with "kể thêm về tình huống"
+- [ ] 👎 tenth → escalation card sent to S
 
-#### 2.3 KB Q&A
-- [ ] Type: `I can't focus today` → KB direct answer + 👍/👎
-- [ ] Press 👍 → `🌟 Vui vì mình giúp được bạn!`
-- [ ] Type obscure question → LLM soft reply with `💡 Gợi ý từ Soul Coach:` prefix + 👍/👎 (plain text, no Markdown parse)
-- [ ] Type emotional sharing (e.g. "thời tiết âm u quá tôi cũng thấy buồn") → empathetic response from LLM (NOT a hedged "I don't have info" reply)
-- [ ] Press 👍 on LLM reply → `🌟 Vui vì mình giúp được bạn!` + supervisor notified of new KB entry
-- [ ] Press 👎 on LLM reply up to 9 times → bot asks for more context each time, no escalation yet
-- [ ] Press 👎 10th time → escalation message sent to supervisor
+### 2.4 Crisis filter
+- [ ] `tự tử` → crisis reply with hotline; no LLM call; no escalation; no `log_out` row
 
-#### 2.4 Crisis filter
-- [ ] Type: `I've been thinking about suicide` → crisis reply with hotline number, NO LLM called
-- [ ] Confirm supervisor receives NO escalation for crisis message (bot handles it directly)
+### 2.5 LLM failover & continuity
+- [ ] Tail log: `tail -f logs/bot.err.log | grep tokens` — every LLM call shows `LLM tokens [<model> key <n>]: in=… out=…`
+- [ ] Force 429 (use known-exhausted key as primary) → log shows failover to key 1 then next model; user still gets reply
+- [ ] Force all models down (set `GEMINI_MODEL=gemini-nonexistent`) → user sees offline empathy template + `/talk_to_human` hint (not "kỹ thuật" error)
 
-#### 2.5 Reminders
-- [ ] `/addtask Test reminder | * * * * *` (every minute) → confirmation
-- [ ] Wait up to 90s → check-in DM arrives with mood keyboard
-- [ ] Tap a mood emoji → `Mood logged: 🙂`
-- [ ] `/pause` → 🔕 message; wait another minute → no new check-in arrives
-- [ ] `/resume` → 🔔 message; wait another minute → check-in arrives again
-- [ ] `/removetask <id>` → task removed
+### 2.6 KB Pending Review (NEW v2.6)
+- [ ] 👍 on an LLM reply → S receives DM "📚 KB pending #N — chờ duyệt" with `✅ Approve` / `❌ Reject` buttons + extracted keywords shown
+- [ ] Active KB entries: confirm pending entry NOT yet returned by `kb.search()` (test by sending similar query before approving)
+- [ ] Tap `✅ Approve` → button removed, message edited to show "Approved"; entry now matches in search
+- [ ] `/kb_pending` → lists pending entries
+- [ ] `/kb_approve <id> sleep "ngủ, mất ngủ"` → category + keywords overridden
+- [ ] `/kb_reject <id>` → entry deleted
+- [ ] **Dedup gate**: 👍 on LLM reply for a question very similar to an existing active entry → no pending entry created (log: `Auto-promote skipped`)
+- [ ] **Length gate**: very short user question (< 4 chars) → no pending entry created
 
-#### 2.6 Escalation flow
-- [ ] `/talk_to_human` → escalation card sent to supervisor with last 5 turns + "Mark resolved" button
-- [ ] Supervisor taps "Mark resolved" → user receives resolution message
+### 2.7 Reminders
+- [ ] `/addtask Test | * * * * *` → check-in DM within 90s
+- [ ] Mood emoji → `Mood logged`
+- [ ] `/pause` → 🔕; no new check-in for ≥ 1 minute
+- [ ] `/resume` → 🔔; check-in resumes
+- [ ] `/removetask <id>` → removed
 
-#### 2.7 Escalation + resolve flow
-- [ ] Send 10 unhappy messages or /talk_to_human → escalation card sent to supervisor
-- [ ] While escalated: send any message → receives wait-reminder (not silence)
-- [ ] /talk_to_human while already escalated → "bạn đang trong hàng chờ" message (not silence)
-- [ ] Supervisor taps "Mark resolved" or /resolve <uid> → user gets re-activated message
-- [ ] Restart bot with unresolved escalation older than 24h → auto-cleared on startup
+### 2.8 Escalation
+- [ ] `/talk_to_human` → escalation card to S
+- [ ] While escalated, send any text → wait-reminder (not silent)
+- [ ] `/talk_to_human` again while escalated → "bạn đang trong hàng chờ"
+- [ ] Tap "Mark resolved" or `/resolve <uid>` → user gets reactivation message
+- [ ] Restart bot with > 24h-old unresolved escalation → auto-cleared on startup
 
-#### 2.8 Supervisor task assignment
-- [ ] Supervisor: `/settask <user_id> | Uống nước | 0 9 * * *` → confirmation + user receives DM with new reminder
-- [ ] User: `/tasks` → new reminder appears in list
+### 2.9 Supervisor task assignment
+- [ ] `/settask <uid> | Uống nước | 0 9 * * *` → S confirmation + user receives DM
+- [ ] User `/tasks` → new entry visible
 
-#### 2.9 /debug command
-- [ ] Supervisor sends /debug → snapshot showing user count, escalated sessions, open escalations, recent LLM replies
+### 2.10 /debug
+- [ ] `/debug` snapshot includes: users count, **KB active + pending counts**, escalated sessions, open escalations, recent LLM replies
 
-#### 2.10 Supervisor KB management
+### 2.11 KB management (manual)
 - [ ] `/kb_add test | What is X? | X is a test. | x,test`
-- [ ] `/kb_list test` → shows new entry
-- [ ] `/kb_edit <id> answer=Updated answer.`
+- [ ] `/kb_list test` → shows entry
+- [ ] `/kb_edit <id> answer=Updated.`
 - [ ] `/kb_del <id>`
 
-#### 2.11 Weekly report (on demand)
-- [ ] Supervisor `/report` → markdown report DM + JSON file attachment
+### 2.12 Weekly report
+- [ ] `/report` → markdown DM + JSON attachment; pending KB count appears in stats
 
-#### 2.12 Health endpoint (UptimeRobot)
-- [ ] Navigate to `http://<server-ip>:8080/health` → `ok`
-- [ ] Open port 8080 in Oracle VCN security list (ingress rule)
-- [ ] Add UptimeRobot HTTP monitor pointing at `http://<server-ip>:8080/health`
+### 2.13 Logrotate
+- [ ] After deploying `deploy/soul-coach.logrotate` → `sudo logrotate -d /etc/logrotate.d/soul-coach` runs without error
+- [ ] After 1 week: `ls logs/` shows `bot.err.log.1.gz` (rotated + compressed)
 
-#### 2.13 Off-host backup (post-deploy)
-- [ ] `rclone config` — add remote named `backup`
-- [ ] `chmod +x deploy/backup_offhost.sh && deploy/backup_offhost.sh`
-- [ ] Verify snapshot appears in `~/backups/` and on the rclone remote
-- [ ] `crontab -e` — add entry per `deploy/backup_offhost.sh` header comment
+### 2.14 Health & backups
+- [ ] `:8080/health` reachable from UptimeRobot
+- [ ] `deploy/backup_offhost.sh` produces snapshot in `~/backups/` and on remote
 
 ---
 
-## 3. Regression checklist after any future change
-
-Before merging a PR:
+## 3. Regression checklist before merge
 
 ```
 [ ] python -m tests.test_smoke  — passes
 [ ] python -m tests.test_unit   — passes
 [ ] No new imports of rapidfuzz.WRatio (use token_set_ratio only)
-[ ] No raw os.environ["TELEGRAM_TOKEN"] — go through config.settings()
-[ ] crisis filter keywords still in handlers/qa.py _CRISIS_KEYWORDS list
+[ ] No new raw os.environ access — must go through config.settings()
+[ ] Crisis filter keywords intact in handlers/qa.py
+[ ] kb.search() still filters status='active'
+[ ] _promote_to_kb still inserts status='pending' (never directly active)
+[ ] LLM failover loop still continues on 429 / 5xx / empty / network — never raises mid-loop
+```
+
+---
+
+## 4. Live monitoring (continuous operation)
+
+Tail-and-grep one-liner for spotting failures fast:
+
+```bash
+gcloud compute ssh soul-coach --zone us-central1-a --command="\
+  sudo tail -f /home/hallo_5ambloom/Bot_The_Soul_Coach/logs/bot.err.log \
+  | grep -E 'tokens|429|5[0-9][0-9]|empty|error|escalat'"
+```
+
+What healthy traffic looks like:
+```
+INFO services.llm :: LLM tokens [gemini-2.5-flash-lite key 0]: in=187 out=82 total=269
+```
+
+What a transient blip looks like (auto-recovered, no user impact):
+```
+WARNING services.llm :: LLM 503 [gemini-2.5-flash-lite key 0] — …
+INFO services.llm :: LLM tokens [gemini-2.5-flash key 0]: in=187 out=110 total=297
+```
+
+What "all attempts failed" looks like (offline empathy fired):
+```
+WARNING services.llm :: LLM 429 [gemini-2.0-flash key 1] — …
+WARNING handlers.qa :: LLM unavailable, using offline empathy: …
 ```
