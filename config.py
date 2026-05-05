@@ -59,7 +59,7 @@ def load_settings() -> Settings:
         reminder_nudge_hours=_int("REMINDER_NUDGE_HOURS", 12),
         reminder_miss_hours=_int("REMINDER_MISS_HOURS", 24),
         report_cron=os.getenv("REPORT_CRON", "0 18 * * SUN"),
-        fuzzy_threshold=_int("FUZZY_THRESHOLD", 70),
+        fuzzy_threshold=_int("FUZZY_THRESHOLD", 65),
         sat_threshold=_int("SAT_THRESHOLD", 10),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         health_port=_int("HEALTH_PORT", 8080),

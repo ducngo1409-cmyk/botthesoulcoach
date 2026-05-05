@@ -31,43 +31,37 @@ def _ensure_client() -> genai.Client:
     return _client
 
 
-SYSTEM_PROMPT = """Bạn là "Soul Coach" — một người bạn đồng hành coaching tâm lý ấm áp, bình tĩnh, hỗ trợ cả tiếng Anh lẫn tiếng Việt.
-You are "Soul Coach" — a warm, calm mental-coaching companion supporting both English and Vietnamese.
+# Compact system prompt — ~60 tokens vs ~350 before.
+# The model infers context from KB entries; we don't need verbose instructions.
+_SYSTEM = (
+    "Soul Coach: ấm áp, ngắn gọn. Dùng ngôn ngữ của user (VI hoặc EN). "
+    "Cảm xúc → đồng cảm trước, gợi ý nhẹ sau. Không bao giờ nói không biết. "
+    "Dùng KB bên dưới nếu liên quan; nếu không dùng kiến thức wellness thông thường. "
+    "Không tự nhận là bác sĩ. Tối đa 80 từ."
+)
 
-RULES:
-- Detect the user's language from their message and reply ENTIRELY in that language.
-  If the message is Vietnamese → reply in Vietnamese. If English → reply in English.
-- When the user shares feelings, emotions, or casual experiences (e.g. feeling sad, gloomy,
-  tired, anxious), ALWAYS respond with genuine empathy first — acknowledge what they feel,
-  then offer a gentle observation or practical suggestion if appropriate.
-  NEVER say you don't have information or can't help for emotional sharing.
-- Use the KB CONTEXT below as a reference for proven techniques when relevant.
-  You may rephrase, shorten, or adapt techniques to fit the conversation naturally.
-- If the KB CONTEXT doesn't directly apply, draw on general, well-established
-  wellness principles (breathing, rest, movement, social connection, self-compassion).
-- Never claim to be a therapist or doctor.
-- For crisis topics (self-harm, suicide, abuse), gently encourage reaching out to a
-  professional or a trusted person. Do not give clinical instructions.
-- Keep replies under 120 words. Conversational tone — no bullet lists for emotional responses.
-"""
+# KB relevance cutoff: don't send entries that scored below this — they just waste tokens.
+_KB_MIN_SCORE = 40
+# Max KB entries to include in prompt context
+_KB_MAX_ENTRIES = 2
 
 
 def _format_kb(entries: List[Tuple[KBEntry, float]]) -> str:
-    if not entries:
-        return "(none)"
+    """Only include relevant entries, with truncated answers to save tokens."""
+    relevant = [(e, s) for e, s in entries if s >= _KB_MIN_SCORE][:_KB_MAX_ENTRIES]
+    if not relevant:
+        return ""
     lines = []
-    for i, (e, score) in enumerate(entries, 1):
-        lines.append(
-            f"[{i}] (cat={e.category}, score={score:.0f})\n"
-            f"    Q: {e.question}\n"
-            f"    A: {e.answer.strip()}"
-        )
-    return "\n\n".join(lines)
+    for e, _ in relevant:
+        # Truncate answer — model needs the gist, not the full text
+        short_a = e.answer.strip().replace("\n", " ")[:100]
+        lines.append(f"[{e.category}] {e.question} → {short_a}")
+    return "\n".join(lines)
 
 
 def _format_history(history: List[Tuple[str, str]]) -> str:
     if not history:
-        return "(no prior turns)"
+        return ""
     return "\n".join(f"{role}: {text}" for role, text in history)
 
 
@@ -79,21 +73,28 @@ def soft_reply(
     """Generate a grounded soft-reply. Returns the bot reply text."""
     client = _ensure_client()
     s = settings()
-    prompt = (
-        f"{SYSTEM_PROMPT}\n\n"
-        f"KB CONTEXT:\n{_format_kb(kb_candidates)}\n\n"
-        f"CONVERSATION (last turns):\n{_format_history(history)}\n\n"
-        f"USER MESSAGE:\n{query}\n\n"
-        "Reply now as Soul Coach:"
-    )
+
+    kb_block = _format_kb(kb_candidates)
+    history_block = _format_history(history)
+
+    # Build a minimal prompt — only include sections that have content
+    parts = [_SYSTEM]
+    if kb_block:
+        parts.append(f"KB:\n{kb_block}")
+    if history_block:
+        parts.append(f"Lịch sử:\n{history_block}")
+    parts.append(f"User: {query}\nSoul Coach:")
+
+    prompt = "\n\n".join(parts)
+
     try:
         resp = client.models.generate_content(
             model=s.gemini_model,
             contents=prompt,
             config=types.GenerateContentConfig(
-                temperature=0.6,
+                temperature=0.7,
                 top_p=0.9,
-                max_output_tokens=400,
+                max_output_tokens=180,   # was 400 — 80-word cap needs ~120 tokens
             ),
         )
         text = (resp.text or "").strip()
@@ -103,8 +104,6 @@ def soft_reply(
     except Exception as e:
         log.exception("Gemini call failed: %s", e)
         return (
-            "Mình muốn trả lời bạn thật kỹ nhưng hiện tại đang gặp sự cố. "
-            "Để mình kết nối bạn với coach con người nhé — họ sẽ liên hệ sớm.\n\n"
-            "I want to give you a thoughtful answer but I'm having trouble right now. "
-            "Let me bring in a human coach — they'll reach out shortly."
+            "Mình đang gặp chút sự cố kỹ thuật. "
+            "Bạn có thể thử lại sau hoặc nhắn /talk_to_human để kết nối với coach nhé."
         )

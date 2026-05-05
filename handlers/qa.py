@@ -155,7 +155,7 @@ async def on_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     # KB miss → Gemini RAG soft reply (no parse_mode — LLM text may have unbalanced markdown)
-    history = _recent_history(user.id, n=6)
+    history = _recent_history(user.id, n=2)
     soft = llm.soft_reply(text, candidates, history)
     reply = FEEDBACK_PREFIX_LLM + soft
     interaction_id = _log_out(user.id, soft, kb_match_id=None, llm_used=True)
