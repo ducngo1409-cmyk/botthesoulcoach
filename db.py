@@ -55,6 +55,8 @@ def _migrate() -> None:
             "ALTER TABLE kb_entries ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
         )
         log.info("Migration: added kb_entries.status column")
+    # Index depends on the column existing — create it here, not in schema.sql.
+    conn().execute("CREATE INDEX IF NOT EXISTS idx_kb_status ON kb_entries(status)")
 
 
 def _clear_stale_escalations() -> None:

@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS kb_entries (
     status      TEXT NOT NULL DEFAULT 'active'  -- active|pending (pending = not used in search until approved)
 );
 CREATE INDEX IF NOT EXISTS idx_kb_category ON kb_entries(category);
-CREATE INDEX IF NOT EXISTS idx_kb_status ON kb_entries(status);
+-- idx_kb_status created in db._migrate() after ensuring column exists
 
 CREATE TABLE IF NOT EXISTS sessions (
     user_id        INTEGER PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,
