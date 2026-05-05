@@ -123,6 +123,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/report — gửi báo cáo tuần ngay\n"
         "/resolve <user\\_id> — đóng escalation\n"
         "/transcript <user\\_id> \\[YYYY-WW] — xem lịch sử hội thoại\n"
+        "/settask <user\\_id> | <tên> | <cron> — giao nhắc nhở cho user\n"
         "/kb\\_add <cat> | <q> | <a> | <kw>\n"
         "/kb\\_list \\[cat]\n"
         "/kb\\_edit <id> <field>=<value>\n"

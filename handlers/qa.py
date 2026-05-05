@@ -28,7 +28,7 @@ from services.kb import KBEntry
 
 log = logging.getLogger(__name__)
 
-FEEDBACK_PREFIX_LLM = "💡 _(gợi ý từ Soul Coach)_\n\n"
+FEEDBACK_PREFIX_LLM = "💡 Gợi ý từ Soul Coach:\n\n"
 
 # Crisis keywords (EN + VI). Matched case-insensitively via substring search.
 _CRISIS_KEYWORDS = [
@@ -154,16 +154,43 @@ async def on_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
-    # KB miss → Gemini RAG soft reply
+    # KB miss → Gemini RAG soft reply (no parse_mode — LLM text may have unbalanced markdown)
     history = _recent_history(user.id, n=6)
     soft = llm.soft_reply(text, candidates, history)
     reply = FEEDBACK_PREFIX_LLM + soft
     interaction_id = _log_out(user.id, soft, kb_match_id=None, llm_used=True)
     await msg.reply_text(
         reply,
-        parse_mode="Markdown",
         reply_markup=_feedback_keyboard(interaction_id),
     )
+
+
+# --- Auto KB promotion ---------------------------------------------------
+
+def _promote_to_kb(bot_reply: str, user_id: int, interaction_id: int) -> tuple[int, str]:
+    """Insert KB entry, update interaction. Returns (new_kb_id, question)."""
+    user_msg = conn().execute(
+        "SELECT text FROM interactions "
+        "WHERE user_id = ? AND id < ? AND direction = 'in' "
+        "ORDER BY id DESC LIMIT 1",
+        (user_id, interaction_id),
+    ).fetchone()
+    question = user_msg["text"] if user_msg else "(unknown)"
+
+    new_id = kb.add(
+        category="general",
+        question=question,
+        answer=bot_reply,
+        keywords="",
+        created_by=None,
+    )
+    with transaction() as cx:
+        cx.execute(
+            "UPDATE interactions SET kb_match_id = ? WHERE id = ?",
+            (new_id, interaction_id),
+        )
+    log.info("Auto-promoted interaction %s to KB #%s", interaction_id, new_id)
+    return new_id, question
 
 
 # --- Feedback button callback -------------------------------------------
@@ -179,6 +206,11 @@ async def feedback_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     user_id = update.effective_user.id
 
+    row = conn().execute(
+        "SELECT llm, text FROM interactions WHERE id = ?", (interaction_id,)
+    ).fetchone()
+    is_llm = bool(row and row["llm"])
+
     if sign == "+":
         with transaction() as cx:
             cx.execute(
@@ -190,6 +222,23 @@ async def feedback_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await context.bot.send_message(
             chat_id=user_id, text="🌟 Vui vì mình giúp được bạn!"
         )
+
+        # Auto-promote LLM reply to KB and notify supervisor
+        if is_llm and row:
+            new_kb_id, question = _promote_to_kb(row["text"], user_id, interaction_id)
+            s = settings()
+            try:
+                await context.bot.send_message(
+                    chat_id=s.supervisor_chat_id,
+                    text=(
+                        f"📚 Bot vừa học câu trả lời mới (KB #{new_kb_id}).\n"
+                        f"Câu hỏi: {question[:120]}\n\n"
+                        f"/kb_edit {new_kb_id} category=<cat> để phân loại\n"
+                        f"/kb_edit {new_kb_id} keywords=<kw> để thêm từ khóa"
+                    ),
+                )
+            except Exception:
+                log.warning("Could not notify supervisor about KB #%s", new_kb_id)
         return
 
     # 👎
@@ -198,24 +247,15 @@ async def feedback_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "UPDATE interactions SET satisfied = 0 WHERE id = ?",
             (interaction_id,),
         )
-    # Was this an LLM soft reply? If so → escalate immediately (KB miss path)
-    row = conn().execute(
-        "SELECT llm FROM interactions WHERE id = ?", (interaction_id,)
-    ).fetchone()
-    is_llm = bool(row and row["llm"])
 
     new_counter = satisfaction.increment(user_id)
     s = settings()
     await query.edit_message_reply_markup(reply_markup=None)
 
-    if is_llm:
-        from handlers.escalation import escalate
-        await escalate(context, user_id, reason="kb_miss")
-        return
-
     if new_counter >= s.sat_threshold:
         from handlers.escalation import escalate
-        await escalate(context, user_id, reason="counter")
+        reason = "counter"
+        await escalate(context, user_id, reason=reason)
         return
 
     await context.bot.send_message(

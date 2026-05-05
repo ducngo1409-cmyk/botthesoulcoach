@@ -1,4 +1,4 @@
-# Soul Coach Bot — Test Plan (v2.1)
+# Soul Coach Bot — Test Plan (v2.3)
 
 Two automated test suites cover all logic that doesn't require live credentials.
 Manual integration tests are listed for first-run verification before going to production.
@@ -123,14 +123,17 @@ python main.py
 
 #### 2.2 Onboarding
 - [ ] `/start` → welcome message + timezone prompt
-- [ ] Reply with `Asia/Tokyo` → confirmation `Timezone set to Asia/Tokyo`
+- [ ] Reply with `Asia/Tokyo` → confirmation `Đã đặt múi giờ: Asia/Tokyo`
 - [ ] `/start` again (returning user) → single welcome-back message, no tz prompt
 
 #### 2.3 KB Q&A
 - [ ] Type: `I can't focus today` → KB direct answer + 👍/👎
-- [ ] Press 👍 → `🌟 Glad that helped.`
-- [ ] Type obscure question → LLM soft reply with `💡` prefix + 👍/👎
-- [ ] Press 👎 on LLM reply → escalation message sent to supervisor
+- [ ] Press 👍 → `🌟 Vui vì mình giúp được bạn!`
+- [ ] Type obscure question → LLM soft reply with `💡 Gợi ý từ Soul Coach:` prefix + 👍/👎 (plain text, no Markdown parse)
+- [ ] Type emotional sharing (e.g. "thời tiết âm u quá tôi cũng thấy buồn") → empathetic response from LLM (NOT a hedged "I don't have info" reply)
+- [ ] Press 👍 on LLM reply → `🌟 Vui vì mình giúp được bạn!` + supervisor notified of new KB entry
+- [ ] Press 👎 on LLM reply up to 9 times → bot asks for more context each time, no escalation yet
+- [ ] Press 👎 10th time → escalation message sent to supervisor
 
 #### 2.4 Crisis filter
 - [ ] Type: `I've been thinking about suicide` → crisis reply with hotline number, NO LLM called
@@ -148,21 +151,25 @@ python main.py
 - [ ] `/talk_to_human` → escalation card sent to supervisor with last 5 turns + "Mark resolved" button
 - [ ] Supervisor taps "Mark resolved" → user receives resolution message
 
-#### 2.7 Supervisor KB management
+#### 2.7 Supervisor task assignment
+- [ ] Supervisor: `/settask <user_id> | Uống nước | 0 9 * * *` → confirmation + user receives DM with new reminder
+- [ ] User: `/tasks` → new reminder appears in list
+
+#### 2.8 Supervisor KB management
 - [ ] `/kb_add test | What is X? | X is a test. | x,test`
 - [ ] `/kb_list test` → shows new entry
 - [ ] `/kb_edit <id> answer=Updated answer.`
 - [ ] `/kb_del <id>`
 
-#### 2.8 Weekly report (on demand)
+#### 2.9 Weekly report (on demand)
 - [ ] Supervisor `/report` → markdown report DM + JSON file attachment
 
-#### 2.9 Health endpoint (UptimeRobot)
+#### 2.10 Health endpoint (UptimeRobot)
 - [ ] Navigate to `http://<server-ip>:8080/health` → `ok`
 - [ ] Open port 8080 in Oracle VCN security list (ingress rule)
 - [ ] Add UptimeRobot HTTP monitor pointing at `http://<server-ip>:8080/health`
 
-#### 2.10 Off-host backup (post-deploy)
+#### 2.11 Off-host backup (post-deploy)
 - [ ] `rclone config` — add remote named `backup`
 - [ ] `chmod +x deploy/backup_offhost.sh && deploy/backup_offhost.sh`
 - [ ] Verify snapshot appears in `~/backups/` and on the rclone remote

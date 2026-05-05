@@ -1,4 +1,4 @@
-# Soul Coach Telegram Bot — Specification (v2.1)
+# Soul Coach Telegram Bot — Specification (v2.3)
 
 > Final, locked-in spec after design discussion. Source of truth for implementation.
 > v2.1 adds: crisis filter, real pause/resume, /health endpoint, tz onboarding,
@@ -62,11 +62,11 @@ IDLE
        ├─ crisis keywords detected ──▶ safe-messaging reply (no escalation)
        ├─ IN_QA
        │     ├─ KB hit (score>=70) + 👍/positive ──▶ IDLE (counter=0)
-       │     ├─ KB hit + 👎/negative, counter<5 ─────▶ IN_QA (counter++)
-       │     ├─ KB miss ──▶ Gemini RAG soft reply
-       │     │     ├─ 👍/positive ─▶ IDLE (counter=0, kb_candidate=1)
-       │     │     └─ 👎/negative ─▶ ESCALATED
-       │     └─ counter==5 ─────────▶ ESCALATED
+       │     ├─ KB hit + 👎/negative, counter<10 ────▶ IN_QA (counter++)
+       │     ├─ KB miss ──▶ Gemini RAG (empathetic, no KB restriction)
+       │     │     ├─ 👍/positive ─▶ IDLE (counter=0, auto-promote KB, notify S)
+       │     │     └─ 👎/negative ─▶ IN_QA (counter++)
+       │     └─ counter==10 ────────▶ ESCALATED
        └─ tz onboarding reply ──▶ sets users.tz, IDLE
 
 ESCALATED ── S /resolve ──▶ IDLE (counter=0)
@@ -108,28 +108,17 @@ Free-text user message → normalize → `KBRetriever.search(query, top_k=5)` re
 - Counter resets on positive, on topic change, after escalation, or after 24h of no Q&A.
 
 ### 6.6 Gemini RAG Fallback
-Triggered on KB miss. Builds prompt:
+Triggered on KB miss. LLM is instructed to:
+- Reply in the user's detected language (VI or EN).
+- For emotional sharing: respond with empathy first, no hedging.
+- Use KB CONTEXT as reference; fall back to general wellness principles.
+- Max 120 words. Conversational tone.
 
-```
-SYSTEM: You are a compassionate mental coach. Use ONLY the KB context
-below. If KB doesn't cover it, give a short hedged reply and acknowledge
-the limit. Reply in the user's language. Max 120 words.
+Reply prefixed with `💡 Gợi ý từ Soul Coach:` + 👍/👎 buttons.
+No `parse_mode` — LLM text may have unbalanced markdown.
 
-KB CONTEXT:
-[1] (cat=focus) Q: ... A: ...
-[2] (cat=stress) Q: ... A: ...
-...
-
-CONVERSATION (last 3):
-U: ...
-B: ...
-
-USER: <current message>
-```
-
-Reply to user prefixed with *"💡 (suggestion based on coach KB)"* + 👍/👎.
-- 👍 → log `interactions.llm=1, satisfied=1, kb_candidate=1`. Surfaces in weekly report for `/kb_promote`.
-- 👎 → escalate immediately, reason=`kb_miss`.
+- 👍 → reset counter + **auto-promote to KB** (category="general") + notify S via DM.
+- 👎 → `counter++`, ask for more context, keep trying. Escalate only when `counter >= SAT_THRESHOLD (10)`.
 
 ### 6.7 Escalation
 Three triggers, all produce a structured DM to S:
@@ -177,7 +166,8 @@ Started in `main.py` before the Telegram poller.
 | `/kb_list [cat]` | S | Browse |
 | `/kb_edit <id> <field>=<value>` | S | Update entry |
 | `/kb_del <id>` | S | Delete entry |
-| `/kb_promote <interaction_id>` | S | Promote successful LLM reply to KB |
+| `/kb_promote <interaction_id>` | S | Manually promote LLM reply to KB |
+| `/settask <user_id> | <title> | <cron>` | S | Assign reminder to a user |
 
 ## 8. Configuration (env vars)
 
@@ -186,14 +176,14 @@ Started in `main.py` before the Telegram poller.
 | `TELEGRAM_TOKEN` | — | required |
 | `SUPERVISOR_CHAT_ID` | — | required |
 | `GEMINI_API_KEY` | — | required for RAG fallback |
-| `GEMINI_MODEL` | `gemini-2.0-flash` | |
+| `GEMINI_MODEL` | `gemini-1.5-flash` | |
 | `DB_PATH` | `data/soul_coach.db` | |
 | `DEFAULT_TZ` | `Asia/Ho_Chi_Minh` | fallback if user doesn't set tz |
 | `REMINDER_NUDGE_HOURS` | `12` | |
 | `REMINDER_MISS_HOURS` | `24` | |
 | `REPORT_CRON` | `0 18 * * SUN` | S timezone |
 | `FUZZY_THRESHOLD` | `70` | rapidfuzz token_set_ratio scale 0–100 |
-| `SAT_THRESHOLD` | `5` | |
+| `SAT_THRESHOLD` | `10` | LLM tries up to 10 times before escalating |
 | `LOG_LEVEL` | `INFO` | |
 | `HEALTH_PORT` | `8080` | HTTP health-check port |
 

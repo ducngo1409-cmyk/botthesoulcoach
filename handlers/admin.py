@@ -197,6 +197,72 @@ async def kb_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("🗑 Deleted." if ok else "Not found.")
 
 
+async def settask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/settask <user_id> | <title> | <cron> — supervisor assigns task to a user."""
+    if not _is_supervisor(update):
+        return
+    raw = " ".join(context.args)
+    parts = [p.strip() for p in raw.split("|")]
+    if len(parts) < 3:
+        await update.message.reply_text(
+            "Usage: `/settask <user_id> | <title> | <cron>`\n"
+            "Example: `/settask 123456789 | Thiền buổi sáng | 0 8 * * *`",
+            parse_mode="Markdown",
+        )
+        return
+    try:
+        user_id = int(parts[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+    title, cron_expr = parts[1], parts[2]
+    if not title or not cron_expr:
+        await update.message.reply_text("Title and cron are both required.")
+        return
+
+    user_row = conn().execute("SELECT tg_id FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+    if not user_row:
+        await update.message.reply_text(f"User {user_id} not found. They must /start the bot first.")
+        return
+
+    from apscheduler.triggers.cron import CronTrigger
+    try:
+        CronTrigger.from_crontab(cron_expr)
+    except Exception:
+        await update.message.reply_text(
+            "Invalid cron. Must be 5 fields: `min hour dom month dow`",
+            parse_mode="Markdown",
+        )
+        return
+
+    with transaction() as cx:
+        cur = cx.execute(
+            "INSERT INTO tasks (user_id, title, cron_expr) VALUES (?, ?, ?)",
+            (user_id, title, cron_expr),
+        )
+        new_id = cur.lastrowid
+
+    from services.reminders import schedule_task_job
+    schedule_task_job(context.application, new_id, user_id, title, cron_expr)
+
+    await update.message.reply_text(
+        f"✅ Đã tạo nhắc nhở #{new_id} cho user {user_id}: *{title}* — `{cron_expr}`",
+        parse_mode="Markdown",
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=(
+                f"📌 Coach đã thêm nhắc nhở mới cho bạn: *{title}*\n"
+                f"Lịch: `{cron_expr}`\n\n"
+                "Nhắn /tasks để xem tất cả nhắc nhở."
+            ),
+            parse_mode="Markdown",
+        )
+    except Exception:
+        log.warning("Could not notify user %s about new task", user_id)
+
+
 async def kb_promote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/kb_promote <interaction_id> — promote a successful LLM reply to a KB entry.
 

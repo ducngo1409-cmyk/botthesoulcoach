@@ -1,6 +1,6 @@
-# Soul Coach — Telegram Bot (v2.1)
+# Soul Coach — Telegram Bot (v2.3)
 
-A proactive mental-coach Telegram bot. Pings users for task check-ins, answers
+A Vietnamese-first mental-coach Telegram bot. Pings users for task check-ins, answers
 from a curated Knowledge Base (KB), uses Gemini Flash as a grounded RAG fallback
 on KB miss, escalates to a human Supervisor (S) when needed, and DMs S a weekly
 report.
