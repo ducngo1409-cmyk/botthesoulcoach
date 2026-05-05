@@ -118,42 +118,47 @@ def soft_reply(
     clients = _get_clients()
     s = settings()
 
+    # Model failover list: primary first, then fallbacks with separate free-tier
+    # buckets. Order matters — try the cheapest/most-available last.
+    models = [m.strip() for m in s.gemini_model.split(",") if m.strip()]
+    if not models:
+        models = ["gemini-2.5-flash-lite"]
+
     last_exc: Optional[Exception] = None
-    for idx, client in enumerate(clients):
-        try:
-            resp = client.models.generate_content(
-                model=s.gemini_model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=_SYSTEM,
-                    temperature=0.7,
-                    top_p=0.9,
-                    max_output_tokens=400,
-                ),
-            )
-            # Log token usage for debugging
-            if resp.usage_metadata:
-                in_t = resp.usage_metadata.prompt_token_count or 0
-                out_t = resp.usage_metadata.candidates_token_count or 0
-                log.info(
-                    "LLM tokens [key %d]: in=%d out=%d total=%d",
-                    idx, in_t, out_t, in_t + out_t,
+    for model in models:
+        for idx, client in enumerate(clients):
+            try:
+                resp = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=_SYSTEM,
+                        temperature=0.7,
+                        top_p=0.9,
+                        max_output_tokens=400,
+                    ),
                 )
-            text = (resp.text or "").strip()
-            if not text:
-                raise LLMError("empty Gemini response")
-            return text
+                if resp.usage_metadata:
+                    in_t = resp.usage_metadata.prompt_token_count or 0
+                    out_t = resp.usage_metadata.candidates_token_count or 0
+                    log.info(
+                        "LLM tokens [%s key %d]: in=%d out=%d total=%d",
+                        model, idx, in_t, out_t, in_t + out_t,
+                    )
+                text = (resp.text or "").strip()
+                if not text:
+                    raise LLMError("empty Gemini response")
+                return text
 
-        except genai_errors.ClientError as e:
-            if e.code == 429:
-                log.warning("Key %d quota exhausted (429) — %s", idx, str(e)[:120])
-                last_exc = LLMQuotaError(f"key_{idx}: {str(e)[:200]}")
-                continue  # try next key
-            log.exception("Gemini API error (key %d): %s", idx, e)
-            raise LLMError(str(e)) from e
-        except Exception as e:
-            log.exception("Unexpected LLM error (key %d): %s", idx, e)
-            raise LLMError(str(e)) from e
+            except genai_errors.ClientError as e:
+                if e.code == 429:
+                    log.warning("Quota 429 [%s key %d] — %s", model, idx, str(e)[:120])
+                    last_exc = LLMQuotaError(f"{model} key_{idx}: {str(e)[:200]}")
+                    continue  # try next key, then next model
+                log.exception("Gemini API error [%s key %d]: %s", model, idx, e)
+                raise LLMError(str(e)) from e
+            except Exception as e:
+                log.exception("Unexpected LLM error [%s key %d]: %s", model, idx, e)
+                raise LLMError(str(e)) from e
 
-    # All keys exhausted
-    raise last_exc or LLMQuotaError("all keys quota-exhausted")
+    raise last_exc or LLMQuotaError("all models/keys quota-exhausted")
