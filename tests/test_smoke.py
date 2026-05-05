@@ -60,25 +60,37 @@ def main() -> int:
     assert entries, "KB is empty after init"
     print(f"    OK ({len(entries)} entries)")
 
-    # 5. KB search hit
-    print("[*] KB search 'I can't focus today'…")
-    results = kb.search("I can't focus today, what helps?", top_k=3)
-    assert results, "no results"
-    top, score = results[0]
-    assert top.category == "focus", f"expected focus, got {top.category}"
-    assert score > 70, f"score too low: {score}"
-    print(f"    OK (top={top.category}, score={score:.0f})")
+    # 5. KB search hit — Vietnamese queries match their categories
+    FUZZY_THRESHOLD = 65
+    hit_cases = [
+        ("không tập trung được hôm nay", "focus"),
+        ("mình đang bị quá tải căng thẳng", "stress"),
+        ("mất ngủ không ngủ được", "sleep"),
+        ("thiếu động lực trì hoãn mãi", "motivation"),
+        ("lo lắng hồi hộp bất an", "anxiety"),
+    ]
+    for query, expected_cat in hit_cases:
+        print(f"[*] KB search '{query}'…")
+        results = kb.search(query, top_k=3)
+        assert results, f"no results for {query!r}"
+        top, score = results[0]
+        assert top.category == expected_cat, \
+            f"expected {expected_cat}, got {top.category} (score={score:.0f})"
+        assert score >= FUZZY_THRESHOLD, \
+            f"score too low for {query!r}: {score:.0f} < {FUZZY_THRESHOLD}"
+        print(f"    OK (cat={top.category}, score={score:.0f})")
 
     # 6. KB search miss — obscure off-topic queries should score below threshold
     print("[*] KB search obscure questions (should miss)…")
     for obscure in [
         "how do I solder a microcontroller pin",
-        "why is the sky blue",
+        "tại sao bầu trời màu xanh",
         "how to refactor a python codebase",
     ]:
         miss = kb.search(obscure, top_k=1)
         score = miss[0][1] if miss else 0
-        assert score < 70, f"{obscure!r} scored {score:.0f}, should be < 70"
+        assert score < FUZZY_THRESHOLD, \
+            f"{obscure!r} scored {score:.0f}, should be < {FUZZY_THRESHOLD}"
         print(f"    {obscure!r} -> {score:.0f} (miss ✓)")
 
     # 7. Satisfaction classifier
