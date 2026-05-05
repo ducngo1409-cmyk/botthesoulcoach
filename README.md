@@ -57,8 +57,14 @@ Remember to open port 8080 inbound in the Oracle VCN security list.
 
 ## Production deploy
 
-See [deploy/ORACLE_DEPLOY.md](deploy/ORACLE_DEPLOY.md) for step-by-step on
-Oracle Cloud Always Free (Ampere A1 Flex, 2 OCPU / 12 GB).
+Two Always Free options — pick one:
+
+| Platform | Guide | VM spec | Keepalive needed? |
+|---|---|---|---|
+| **GCP** (recommended) | [deploy/GCP_DEPLOY.md](deploy/GCP_DEPLOY.md) | e2-micro 1 GB RAM | ❌ No |
+| Oracle Cloud | [deploy/ORACLE_DEPLOY.md](deploy/ORACLE_DEPLOY.md) | A1 Flex 12 GB RAM | ✅ Yes |
+
+GCP is simpler: no idle-reclamation, no keepalive script, and no Oracle account gotchas.
 
 ## Layout
 
