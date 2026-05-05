@@ -55,7 +55,7 @@ def load_settings() -> Settings:
         supervisor_chat_id=int(_req("SUPERVISOR_CHAT_ID")),
         gemini_api_key=_req("GEMINI_API_KEY"),
         gemini_api_key_2=os.getenv("GEMINI_API_KEY_2", ""),
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
         db_path=db_path,
         default_tz=os.getenv("DEFAULT_TZ", "Asia/Ho_Chi_Minh"),
         reminder_nudge_hours=_int("REMINDER_NUDGE_HOURS", 12),

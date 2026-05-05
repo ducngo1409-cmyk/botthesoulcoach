@@ -128,7 +128,7 @@ def soft_reply(
                     system_instruction=_SYSTEM,
                     temperature=0.7,
                     top_p=0.9,
-                    max_output_tokens=180,
+                    max_output_tokens=400,
                 ),
             )
             # Log token usage for debugging
