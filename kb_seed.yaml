@@ -1,0 +1,65 @@
+# Initial KB seed. Loaded once on first run if kb_entries is empty.
+# Categories: focus, stress, sleep, motivation, anxiety, relationships, habits, general
+- category: focus
+  question: I can't focus today, what helps?
+  answer: |
+    Try the 25/5 Pomodoro: 25 min single-task, 5 min stand-up break, repeat 4x then a 30 min break.
+    Close every browser tab except the one you need. If your mind keeps wandering, write the
+    distracting thought on paper — your brain stops chasing it once it's "saved".
+  keywords: focus, concentrate, distracted, can't focus, pomodoro, attention
+
+- category: stress
+  question: I'm feeling overwhelmed
+  answer: |
+    Pause for 60 seconds. Inhale 4s, hold 4s, exhale 6s — repeat 5 times. This activates your
+    parasympathetic system and lowers cortisol. Then write down the top 3 things on your mind
+    and pick ONE to act on next. Overwhelm usually comes from carrying everything at once.
+  keywords: overwhelmed, stress, stressed, anxious, too much, panic
+
+- category: sleep
+  question: I can't sleep at night
+  answer: |
+    Three things tonight: (1) no screens 30 min before bed, (2) cool room (~19°C), (3) if you
+    can't sleep after 20 min, get up, sit in dim light, read something boring on paper, then
+    try again. Don't lie there fighting it — that trains your brain to associate the bed with anxiety.
+  keywords: sleep, insomnia, can't sleep, awake, tired, restless
+
+- category: motivation
+  question: I have no motivation to start
+  answer: |
+    Motivation follows action, not the other way around. Commit to just 2 minutes — open the
+    file, put on running shoes, write one sentence. The "starting cost" is the real barrier;
+    once you've started, momentum carries you. If 2 min feels too much, do 30 seconds.
+  keywords: motivation, lazy, procrastinate, can't start, no energy, motivated
+
+- category: anxiety
+  question: I keep worrying about something
+  answer: |
+    Try the 5-4-3-2-1 grounding: name 5 things you can see, 4 you can touch, 3 you can hear,
+    2 you can smell, 1 you can taste. This pulls your brain out of the worry loop and back
+    to the present. If the worry is about a real problem, schedule a 15-min "worry slot"
+    later today and tell yourself you'll think about it then.
+  keywords: anxiety, worry, anxious, nervous, fear, scared
+
+- category: habits
+  question: How do I build a new habit?
+  answer: |
+    Stack it: do the new habit right after an existing one ("after I brush teeth, I'll meditate
+    1 min"). Keep it laughably small at first — the goal for week 1 is not the result, it's
+    showing up. Track it on a paper calendar with an X. Don't break the chain.
+  keywords: habit, routine, build habit, consistency, daily
+
+- category: relationships
+  question: I had a fight with someone close
+  answer: |
+    Give it a few hours before responding — emotional spikes pass faster than we think. When
+    you do reconnect, lead with what you understood from their side, even if you disagree.
+    "I hear that you felt X" is disarming. Then share your side as feelings, not accusations.
+  keywords: fight, argue, conflict, relationship, partner, family, friend
+
+- category: general
+  question: I just want to talk
+  answer: |
+    I'm here. Tell me what's on your mind — there's no wrong way to start. If it helps, you
+    can begin with "today I felt..." or "I've been thinking about..." and let it flow from there.
+  keywords: talk, listen, chat, share, lonely

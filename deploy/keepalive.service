@@ -1,0 +1,7 @@
+[Unit]
+Description=Soul Coach keepalive (anti-idle for Oracle Always Free)
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/home/ubuntu/Bot_The_Soul_Coach/deploy/keepalive.sh

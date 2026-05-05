@@ -1,0 +1,24 @@
+[Unit]
+Description=Soul Coach Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Bot_The_Soul_Coach
+EnvironmentFile=/home/ubuntu/Bot_The_Soul_Coach/.env
+ExecStart=/home/ubuntu/Bot_The_Soul_Coach/.venv/bin/python /home/ubuntu/Bot_The_Soul_Coach/main.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/ubuntu/Bot_The_Soul_Coach/logs/bot.log
+StandardError=append:/home/ubuntu/Bot_The_Soul_Coach/logs/bot.err.log
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/Bot_The_Soul_Coach
+
+[Install]
+WantedBy=multi-user.target

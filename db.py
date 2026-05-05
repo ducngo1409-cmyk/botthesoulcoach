@@ -1,0 +1,100 @@
+"""SQLite connection + schema bootstrap.
+
+We use a single shared connection in WAL mode. python-telegram-bot is async but
+SQLite operations here are short and synchronous; this is fine for the expected
+load (single-digit users, few writes/sec).
+"""
+
+from __future__ import annotations
+
+import logging
+import sqlite3
+import threading
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator
+
+from config import settings
+
+log = logging.getLogger(__name__)
+
+_conn: sqlite3.Connection | None = None
+_lock = threading.RLock()
+
+
+def init_db() -> None:
+    """Open connection, apply schema, run KB seed if needed."""
+    global _conn
+    s = settings()
+
+    _conn = sqlite3.connect(
+        s.db_path,
+        check_same_thread=False,
+        detect_types=sqlite3.PARSE_DECLTYPES,
+        isolation_level=None,  # autocommit; we manage transactions explicitly
+    )
+    _conn.row_factory = sqlite3.Row
+    _conn.execute("PRAGMA foreign_keys = ON;")
+
+    schema_path = s.project_root / "schema.sql"
+    with schema_path.open("r", encoding="utf-8") as f:
+        _conn.executescript(f.read())
+
+    log.info("DB initialized at %s", s.db_path)
+    _maybe_seed_kb()
+
+
+def _maybe_seed_kb() -> None:
+    """Load kb_seed.yaml on first run only (if kb_entries is empty)."""
+    import yaml  # local import — only needed at startup
+
+    s = settings()
+    seed_path = s.project_root / "kb_seed.yaml"
+    if not seed_path.exists():
+        log.info("No kb_seed.yaml present; skipping seed")
+        return
+
+    cur = conn().execute("SELECT COUNT(*) AS n FROM kb_entries")
+    n = cur.fetchone()["n"]
+    if n > 0:
+        log.info("KB already has %d entries; skipping seed", n)
+        return
+
+    with seed_path.open("r", encoding="utf-8") as f:
+        entries = yaml.safe_load(f) or []
+
+    with transaction() as cx:
+        for e in entries:
+            cx.execute(
+                "INSERT INTO kb_entries (category, question, answer, keywords) "
+                "VALUES (?, ?, ?, ?)",
+                (e["category"], e["question"], e["answer"], e.get("keywords", "")),
+            )
+    log.info("Seeded %d KB entries", len(entries))
+
+
+def conn() -> sqlite3.Connection:
+    if _conn is None:
+        raise RuntimeError("DB not initialized; call init_db() first")
+    return _conn
+
+
+@contextmanager
+def transaction() -> Iterator[sqlite3.Connection]:
+    """BEGIN / COMMIT or ROLLBACK. Acquires the module-level lock."""
+    cx = conn()
+    with _lock:
+        cx.execute("BEGIN")
+        try:
+            yield cx
+            cx.execute("COMMIT")
+        except Exception:
+            cx.execute("ROLLBACK")
+            raise
+
+
+def close() -> None:
+    global _conn
+    if _conn is not None:
+        _conn.close()
+        _conn = None
