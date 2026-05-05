@@ -1,7 +1,13 @@
-"""Escalation handlers: triggers + supervisor notification + /talk_to_human."""
+"""Escalation handlers: triggers + supervisor notification + /talk_to_human.
+
+Root cause of silent failures: Telegram Markdown v1 rejects messages that
+contain unescaped * _ ` [ ] characters in user-supplied text. We now use
+parse_mode="HTML" throughout and escape all user content with html.escape().
+"""
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 from typing import Literal
@@ -24,7 +30,8 @@ _REASON_LABEL = {
 }
 
 
-def _last_n_turns(user_id: int, n: int = 5) -> str:
+def _last_n_turns_html(user_id: int, n: int = 5) -> str:
+    """Return last N interactions as HTML-safe text."""
     rows = conn().execute(
         "SELECT direction, text, ts FROM interactions "
         "WHERE user_id = ? ORDER BY id DESC LIMIT ?",
@@ -32,25 +39,27 @@ def _last_n_turns(user_id: int, n: int = 5) -> str:
     ).fetchall()
     rows = list(reversed(rows))
     if not rows:
-        return "_(no prior interactions)_"
+        return "<i>(no prior interactions)</i>"
     out = []
     for r in rows:
         who = "👤" if r["direction"] == "in" else "🤖"
-        snippet = r["text"][:200] + ("…" if len(r["text"]) > 200 else "")
-        out.append(f"{who} `{r['ts']}` {snippet}")
+        snippet = html.escape(r["text"][:200]) + ("…" if len(r["text"]) > 200 else "")
+        ts = html.escape(str(r["ts"]))
+        out.append(f"{who} <code>{ts}</code>  {snippet}")
     return "\n".join(out)
 
 
-def _user_label(user_id: int) -> str:
+def _user_label_html(user_id: int) -> str:
     row = conn().execute(
         "SELECT name FROM users WHERE tg_id = ?", (user_id,)
     ).fetchone()
-    name = row["name"] if row else "?"
-    return f"{name} (uid `{user_id}`)"
+    name = html.escape(row["name"] if row else "?")
+    return f"{name} (uid <code>{user_id}</code>)"
 
 
-async def escalate(context: ContextTypes.DEFAULT_TYPE, user_id: int,
-                   reason: Reason) -> None:
+async def escalate(
+    context: ContextTypes.DEFAULT_TYPE, user_id: int, reason: Reason
+) -> None:
     """Notify S, mark user escalated, tell user a human is coming."""
     s = settings()
 
@@ -78,14 +87,14 @@ async def escalate(context: ContextTypes.DEFAULT_TYPE, user_id: int,
             (user_id, reason, json.dumps(context_payload, ensure_ascii=False)),
         )
 
-    # Notify supervisor
+    # Build supervisor notification using HTML (safe against user-supplied text)
     text = (
-        "🚨 *Escalation*\n"
-        f"User: {_user_label(user_id)}\n"
-        f"Reason: {_REASON_LABEL[reason]}\n\n"
-        "*Last turns:*\n"
-        f"{_last_n_turns(user_id)}\n\n"
-        f"Reply with `/resolve {user_id}` once handled."
+        "🚨 <b>Escalation</b>\n"
+        f"User: {_user_label_html(user_id)}\n"
+        f"Reason: {html.escape(_REASON_LABEL[reason])}\n\n"
+        "<b>Last turns:</b>\n"
+        f"{_last_n_turns_html(user_id)}\n\n"
+        f"Tap <b>Mark resolved</b> or send <code>/resolve {user_id}</code> once handled."
     )
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Mark resolved", callback_data=f"resolve:{user_id}"),
@@ -94,23 +103,30 @@ async def escalate(context: ContextTypes.DEFAULT_TYPE, user_id: int,
         await context.bot.send_message(
             chat_id=s.supervisor_chat_id,
             text=text,
-            parse_mode="Markdown",
+            parse_mode="HTML",
             reply_markup=keyboard,
         )
+        log.info("Escalation for user %s (%s) sent to supervisor", user_id, reason)
     except Exception:
-        log.exception("Failed to send escalation to supervisor")
+        log.exception(
+            "Failed to send escalation to supervisor (chat_id=%s). "
+            "Make sure the supervisor has sent /start to the bot at least once.",
+            s.supervisor_chat_id,
+        )
 
     # Tell user
     try:
         await context.bot.send_message(
             chat_id=user_id,
             text=(
-                "I want to make sure you get the right support here. "
+                "Mình muốn bạn nhận được hỗ trợ đúng nhất. "
+                "Mình đã kết nối với coach con người — họ sẽ liên hệ bạn sớm. 🤝\n\n"
+                "I want to make sure you get the right support. "
                 "I've looped in a human coach — they'll reach out shortly. 🤝"
             ),
         )
     except Exception:
-        log.exception("Failed to notify user of escalation")
+        log.exception("Failed to notify user %s of escalation", user_id)
 
 
 async def talk_to_human(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -126,8 +142,9 @@ async def resolve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if update.effective_user is None or update.effective_user.id != s.supervisor_chat_id:
         return
     if not context.args:
-        await update.message.reply_text("Usage: `/resolve <user_id>`",
-                                        parse_mode="Markdown")
+        await update.message.reply_text(
+            "Usage: <code>/resolve &lt;user_id&gt;</code>", parse_mode="HTML"
+        )
         return
     try:
         user_id = int(context.args[0])
@@ -147,7 +164,10 @@ async def resolve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         await context.bot.send_message(
             chat_id=user_id,
-            text="✨ I'm back online for you. Let me know how I can help.",
+            text=(
+                "✨ Mình đã sẵn sàng hỗ trợ bạn trở lại. Bạn cần gì cứ nhắn nhé.\n\n"
+                "✨ I'm back online for you. Let me know how I can help."
+            ),
         )
     except Exception:
         pass
@@ -174,11 +194,16 @@ async def resolve_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
     satisfaction.clear_escalation(user_id)
     await query.edit_message_reply_markup(reply_markup=None)
-    await context.bot.send_message(s.supervisor_chat_id, f"✅ Resolved for {user_id}.")
+    await context.bot.send_message(
+        s.supervisor_chat_id, f"✅ Resolved for user {user_id}."
+    )
     try:
         await context.bot.send_message(
             chat_id=user_id,
-            text="✨ I'm back online for you. Let me know how I can help.",
+            text=(
+                "✨ Mình đã sẵn sàng hỗ trợ bạn trở lại. Bạn cần gì cứ nhắn nhé.\n\n"
+                "✨ I'm back online for you. Let me know how I can help."
+            ),
         )
     except Exception:
         pass

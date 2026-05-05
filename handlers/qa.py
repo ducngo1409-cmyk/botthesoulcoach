@@ -43,14 +43,14 @@ _CRISIS_KEYWORDS = [
 ]
 
 _CRISIS_REPLY = (
-    "💙 I can hear that you're going through something really painful right now.\n\n"
-    "Please reach out to a trained professional or someone you trust — "
-    "you don't have to face this alone.\n\n"
-    "🆘 *Crisis support:*\n"
-    "• Vietnam (free, 24/7): *1800 599 920*\n"
-    "• International directory: findahelpline.com\n\n"
-    "I'm here to listen, but I'm not a substitute for real human support. "
-    "You matter. 💙"
+    "💙 Mình nghe thấy bạn đang trải qua điều rất đau lòng.\n"
+    "Hãy liên hệ với chuyên gia hoặc người bạn tin tưởng — bạn không phải đối mặt một mình.\n\n"
+    "💙 I can hear that you're going through something really painful.\n"
+    "Please reach out to a professional or someone you trust — you don't have to face this alone.\n\n"
+    "🆘 Hỗ trợ khẩn cấp / Crisis support:\n"
+    "• Việt Nam (miễn phí, 24/7): 1800 599 920\n"
+    "• Quốc tế / International: findahelpline.com\n\n"
+    "Mình luôn ở đây, nhưng mình không thể thay thế sự hỗ trợ từ con người thật. Bạn quan trọng lắm. 💙"
 )
 
 
