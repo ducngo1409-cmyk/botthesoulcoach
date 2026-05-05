@@ -145,7 +145,7 @@ def soft_reply(
             return text
 
         except genai_errors.ClientError as e:
-            if e.status_code == 429:
+            if e.code == 429:
                 log.warning("Key %d quota exhausted (429) — %s", idx, str(e)[:120])
                 last_exc = LLMQuotaError(f"key_{idx}: {str(e)[:200]}")
                 continue  # try next key
