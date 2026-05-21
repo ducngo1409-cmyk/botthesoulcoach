@@ -131,12 +131,48 @@ def main() -> int:
     assert kb.get(new_id) is None
     print("    OK")
 
-    # 10. Cron validation
-    print("[*] cron validation…")
-    from handlers.tasks import _validate_cron
-    assert _validate_cron("0 8 * * *")
-    assert _validate_cron("0 19 * * 1,3,5")
-    assert not _validate_cron("not a cron")
+    # 10. Time parser (cron + friendly forms)
+    print("[*] timeparser.parse…")
+    from services import timeparser
+    cron, _ = timeparser.parse("0 8 * * *")
+    assert cron == "0 8 * * *"
+    cron, _ = timeparser.parse("daily 22:30")
+    assert cron == "30 22 * * *", f"expected '30 22 * * *', got {cron!r}"
+    cron, _ = timeparser.parse("weekdays 9:00")
+    assert cron == "0 9 * * 1-5"
+    cron, _ = timeparser.parse("every 6 hours")
+    assert cron == "0 */6 * * *"
+    cron, _ = timeparser.parse("not a time at all")
+    assert cron is None
+    print("    OK")
+
+    # 11. Timezone alias resolver
+    print("[*] tz_aliases.resolve_tz…")
+    from services.tz_aliases import resolve_tz
+    assert resolve_tz("Hanoi") == "Asia/Ho_Chi_Minh"
+    assert resolve_tz("Việt Nam") == "Asia/Ho_Chi_Minh"
+    assert resolve_tz("Saigon") == "Asia/Ho_Chi_Minh"
+    assert resolve_tz("vn") == "Asia/Ho_Chi_Minh"
+    assert resolve_tz("Tokyo") == "Asia/Tokyo"
+    assert resolve_tz("Asia/Singapore") == "Asia/Singapore"
+    assert resolve_tz("+7") == "Etc/GMT-7"
+    assert resolve_tz("UTC-5") == "Etc/GMT+5"
+    assert resolve_tz("nonsense") is None
+    print("    OK")
+
+    # 12. KB pending review queue
+    print("[*] KB pending queue…")
+    pid = kb.add("test", "Test pending question?", "Test answer.", "test", status="pending")
+    assert kb.get(pid).status == "pending"
+    hits = kb.search("Test pending question")
+    assert all(e.id != pid for e, _ in hits), "pending entry must not appear in search"
+    assert kb.approve(pid, category="general")
+    assert kb.get(pid).status == "active"
+    sim = kb.has_similar("Test pending question")
+    assert sim is not None, "active entry should match has_similar"
+    kw = kb.extract_keywords("tôi đang lo lắng quá nhiều về công việc")
+    assert "lo" in kw or "lắng" in kw or "công" in kw or "việc" in kw
+    kb.delete(pid)
     print("    OK")
 
     print("\n✅ ALL SMOKE TESTS PASSED")

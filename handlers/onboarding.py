@@ -5,24 +5,18 @@ from __future__ import annotations
 import logging
 from typing import Set
 
-import pytz
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from config import settings
 from db import conn, transaction
+from services.tz_aliases import resolve_tz
 
 log = logging.getLogger(__name__)
 
 # In-memory set of user IDs waiting to reply with their timezone.
 # Survives only for the lifetime of the process — good enough for onboarding.
 _awaiting_tz: Set[int] = set()
-
-_COMMON_TZ = (
-    "Asia/Ho\\_Chi\\_Minh · Asia/Singapore · Asia/Bangkok · "
-    "Asia/Tokyo · Asia/Seoul · Europe/London · Europe/Paris · "
-    "America/New\\_York · America/Los\\_Angeles · UTC"
-)
 
 
 def is_awaiting_tz(user_id: int) -> bool:
@@ -52,22 +46,34 @@ async def handle_tz_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     _awaiting_tz.discard(user.id)
     text = (update.message.text or "").strip()
 
-    try:
-        pytz.timezone(text)  # raises if invalid
+    if text.lower() in {"skip", "bo qua", "bỏ qua", "khong", "không"}:
+        await update.message.reply_text(
+            "👌 Giữ múi giờ mặc định. Bạn có thể đổi sau bằng `/tz <múi giờ>`.",
+            parse_mode="Markdown",
+        )
+        return True
+
+    iana = resolve_tz(text)
+    if iana:
         with transaction() as cx:
-            cx.execute("UPDATE users SET tz = ? WHERE tg_id = ?", (text, user.id))
+            cx.execute("UPDATE users SET tz = ? WHERE tg_id = ?", (iana, user.id))
         await update.message.reply_text(
-            f"✅ Đã đặt múi giờ: *{text}*. Nhắc nhở của bạn sẽ hiển thị theo giờ địa phương.",
+            f"✅ Đã đặt múi giờ *{iana}*. Nhắc nhở sẽ hiển thị theo giờ địa phương của bạn.",
             parse_mode="Markdown",
         )
-        log.info("User %s set timezone to %s", user.id, text)
-    except Exception:
+        log.info("User %s set tz %r → %s", user.id, text, iana)
+    else:
+        # Keep the user in the awaiting state so they can try again without /start.
+        _awaiting_tz.add(user.id)
         await update.message.reply_text(
-            f"⚠️ Mình không nhận ra *{text}* là múi giờ hợp lệ — "
-            f"giữ nguyên mặc định. Bạn có thể nhắn lại tên múi giờ bất cứ lúc nào.",
+            f"⚠️ Mình chưa nhận ra *{text}*. Thử lại với:\n"
+            "• Tên thành phố: `Hanoi`, `Tokyo`, `Singapore`, `London`\n"
+            "• Quốc gia: `Vietnam`, `Japan`, `UK`\n"
+            "• Múi giờ: `+7`, `UTC+9`, `GMT-5`\n"
+            "• Hoặc nhắn `skip` để giữ mặc định",
             parse_mode="Markdown",
         )
-        log.debug("User %s sent invalid tz %r", user.id, text)
+        log.debug("User %s sent unrecognized tz %r", user.id, text)
     return True
 
 
@@ -79,25 +85,56 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if fresh:
         await update.message.reply_text(
-            f"👋 Xin chào {user.first_name}, mình là Soul Coach của bạn.\n\n"
-            "Mình sẽ nhắc nhở bạn về những điều bạn muốn duy trì, "
-            "và luôn sẵn sàng lắng nghe khi bạn cần.\n\n"
+            f"👋 Xin chào {user.first_name}, mình là *Soul Coach* của bạn.\n\n"
+            "Mình giúp bạn duy trì những thói quen tốt và lắng nghe khi cần.\n\n"
             "Thử ngay:\n"
-            "• /addtask Thiền buổi sáng | 0 8 * * *\n"
-            "• /tasks — xem nhắc nhở của bạn\n"
-            "• /help — danh sách lệnh đầy đủ\n"
-            "• Hoặc cứ nhắn bất cứ điều gì đang trong đầu bạn."
+            "• `/addtask Thiền | daily 7:00`\n"
+            "• `/tasks` — xem nhắc nhở của bạn\n"
+            "• `/help` — danh sách lệnh đầy đủ\n"
+            "• Hoặc cứ nhắn bất cứ điều gì đang trong đầu bạn.",
+            parse_mode="Markdown",
         )
         await update.message.reply_text(
-            "🕐 *Bạn đang ở múi giờ nào?*\n\n"
-            f"Gợi ý: {_COMMON_TZ}\n\n"
-            "_Nhắn tên múi giờ hợp lệ, ví dụ `Asia/Ho_Chi_Minh`. "
-            "Bỏ qua nếu muốn giữ mặc định._",
+            "🕐 *Bạn đang ở thành phố nào?*\n"
+            "_Ví dụ: `Hanoi`, `Saigon`, `Tokyo`, `+7`, hoặc `skip` để bỏ qua._",
             parse_mode="Markdown",
         )
         _awaiting_tz.add(user.id)
     else:
-        await update.message.reply_text("👋 Chào mừng trở lại! Nhắn /help để xem mình có thể làm gì cho bạn.")
+        await update.message.reply_text(
+            f"👋 Chào mừng trở lại, {user.first_name}! Nhắn /help để xem mình có thể làm gì."
+        )
+
+
+async def tz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/tz <city|country|offset> — set or change timezone any time."""
+    user = update.effective_user
+    if user is None:
+        return
+    if not context.args:
+        row = conn().execute("SELECT tz FROM users WHERE tg_id = ?", (user.id,)).fetchone()
+        current = row["tz"] if row else "?"
+        await update.message.reply_text(
+            f"🕐 Múi giờ hiện tại: *{current}*\n"
+            "Đổi bằng `/tz <thành phố hoặc múi giờ>`\n"
+            "Ví dụ: `/tz Hanoi`, `/tz Tokyo`, `/tz +7`",
+            parse_mode="Markdown",
+        )
+        return
+    arg = " ".join(context.args).strip()
+    iana = resolve_tz(arg)
+    if iana:
+        with transaction() as cx:
+            cx.execute("UPDATE users SET tz = ? WHERE tg_id = ?", (iana, user.id))
+        await update.message.reply_text(
+            f"✅ Đã đặt múi giờ *{iana}*.", parse_mode="Markdown"
+        )
+        log.info("User %s changed tz to %s via /tz", user.id, iana)
+    else:
+        await update.message.reply_text(
+            f"⚠️ Không nhận ra *{arg}*. Thử `Hanoi`, `Tokyo`, hay `+7`.",
+            parse_mode="Markdown",
+        )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -109,11 +146,16 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_cmds = (
         "📋 *Lệnh người dùng*\n"
         "/start — đăng ký\n"
+        "/tz \\[thành phố] — xem/đổi múi giờ (vd `/tz Tokyo`)\n"
         "/tasks — xem nhắc nhở\n"
-        "/addtask <tên> | <cron> — thêm nhắc nhở (cron 5 trường)\n"
+        "/addtask <tên> | <giờ> — thêm nhắc nhở\n"
+        "  vd: `/addtask Thiền | daily 7:00`\n"
+        "  vd: `/addtask Họp | every monday 9:00`\n"
+        "  vd: `/addtask Báo cáo | weekdays 17:30`\n"
         "/removetask <id> — xóa nhắc nhở\n"
-        "/pause — tắt nhắc nhở\n"
-        "/resume — bật lại nhắc nhở\n"
+        "/pause \\[id] — tắt 1 nhắc (hoặc tất cả nếu không có id)\n"
+        "/resume \\[id] — bật lại\n"
+        "/nudge <id> <hours> — set giờ nhắc lại (0 = tắt nhắc lại)\n"
         "/talk\\_to\\_human — kết nối với coach con người\n\n"
         "_Hoặc cứ nhắn bất cứ điều gì, mình sẽ cố giúp._"
     )

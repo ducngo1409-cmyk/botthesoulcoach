@@ -51,6 +51,8 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("removetask", tasks.remove_task))
     app.add_handler(CommandHandler("pause", tasks.pause))
     app.add_handler(CommandHandler("resume", tasks.resume))
+    app.add_handler(CommandHandler("nudge", tasks.nudge))
+    app.add_handler(CommandHandler("tz", onboarding.tz_cmd))
     app.add_handler(CommandHandler("talk_to_human", escalation.talk_to_human))
 
     # --- Commands (supervisor) ---

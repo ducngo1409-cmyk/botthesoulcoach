@@ -48,6 +48,7 @@ def init_db() -> None:
 
 def _migrate() -> None:
     """Idempotent column-adding migrations for existing DBs."""
+    # kb_entries.status (v2.6)
     cur = conn().execute("PRAGMA table_info(kb_entries)")
     cols = {row[1] for row in cur.fetchall()}
     if "status" not in cols:
@@ -55,8 +56,17 @@ def _migrate() -> None:
             "ALTER TABLE kb_entries ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
         )
         log.info("Migration: added kb_entries.status column")
-    # Index depends on the column existing — create it here, not in schema.sql.
     conn().execute("CREATE INDEX IF NOT EXISTS idx_kb_status ON kb_entries(status)")
+
+    # tasks.nudge_hours / max_nudges (v2.7)
+    cur = conn().execute("PRAGMA table_info(tasks)")
+    tcols = {row[1] for row in cur.fetchall()}
+    if "nudge_hours" not in tcols:
+        conn().execute("ALTER TABLE tasks ADD COLUMN nudge_hours INTEGER")
+        log.info("Migration: added tasks.nudge_hours column")
+    if "max_nudges" not in tcols:
+        conn().execute("ALTER TABLE tasks ADD COLUMN max_nudges INTEGER NOT NULL DEFAULT 1")
+        log.info("Migration: added tasks.max_nudges column")
 
 
 def _clear_stale_escalations() -> None:

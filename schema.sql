@@ -12,12 +12,14 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id    INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
-    title      TEXT NOT NULL,
-    cron_expr  TEXT NOT NULL,                -- standard 5-field cron
-    active     INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
+    title        TEXT NOT NULL,
+    cron_expr    TEXT NOT NULL,              -- standard 5-field cron
+    active       INTEGER NOT NULL DEFAULT 1,
+    nudge_hours  INTEGER,                    -- NULL = use global REMINDER_NUDGE_HOURS; 0 = no nudge
+    max_nudges   INTEGER NOT NULL DEFAULT 1, -- how many follow-up nudges to send
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id, active);
 

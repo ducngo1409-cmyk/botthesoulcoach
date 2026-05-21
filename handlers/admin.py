@@ -247,15 +247,19 @@ async def kb_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def settask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/settask <user_id> | <title> | <cron> — supervisor assigns task to a user."""
+    """/settask <user_id> | <title> | <giờ> — supervisor assigns task to a user.
+
+    Accepts both friendly time ('daily 22:30') and raw cron ('30 22 * * *').
+    """
     if not _is_supervisor(update):
         return
     raw = " ".join(context.args)
     parts = [p.strip() for p in raw.split("|")]
     if len(parts) < 3:
         await update.message.reply_text(
-            "Usage: `/settask <user_id> | <title> | <cron>`\n"
-            "Example: `/settask 123456789 | Thiền buổi sáng | 0 8 * * *`",
+            "Usage: `/settask <user_id> | <title> | <giờ>`\n"
+            "Vd: `/settask 123456789 | Thiền | daily 7:00`\n"
+            "Vd: `/settask 123456789 | Họp | weekdays 9:00`",
             parse_mode="Markdown",
         )
         return
@@ -264,24 +268,22 @@ async def settask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except ValueError:
         await update.message.reply_text("user_id must be a number.")
         return
-    title, cron_expr = parts[1], parts[2]
-    if not title or not cron_expr:
-        await update.message.reply_text("Title and cron are both required.")
+    title, time_expr = parts[1], parts[2]
+    if not title or not time_expr:
+        await update.message.reply_text("Title and time are both required.")
         return
 
     user_row = conn().execute("SELECT tg_id FROM users WHERE tg_id = ?", (user_id,)).fetchone()
     if not user_row:
-        await update.message.reply_text(f"User {user_id} not found. They must /start the bot first.")
+        await update.message.reply_text(
+            f"User {user_id} not found. They must /start the bot first."
+        )
         return
 
-    from apscheduler.triggers.cron import CronTrigger
-    try:
-        CronTrigger.from_crontab(cron_expr)
-    except Exception:
-        await update.message.reply_text(
-            "Invalid cron. Must be 5 fields: `min hour dom month dow`",
-            parse_mode="Markdown",
-        )
+    from services import timeparser
+    cron_expr, summary = timeparser.parse(time_expr)
+    if not cron_expr:
+        await update.message.reply_text(summary, parse_mode="Markdown")
         return
 
     with transaction() as cx:
@@ -295,7 +297,8 @@ async def settask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     schedule_task_job(context.application, new_id, user_id, title, cron_expr)
 
     await update.message.reply_text(
-        f"✅ Đã tạo nhắc nhở #{new_id} cho user {user_id}: *{title}* — `{cron_expr}`",
+        f"✅ Đã tạo nhắc nhở #{new_id} cho user {user_id}: *{title}*\n"
+        f"⏰ {summary}\n`{cron_expr}`",
         parse_mode="Markdown",
     )
     try:
@@ -303,7 +306,7 @@ async def settask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             chat_id=user_id,
             text=(
                 f"📌 Coach đã thêm nhắc nhở mới cho bạn: *{title}*\n"
-                f"Lịch: `{cron_expr}`\n\n"
+                f"⏰ {summary}\n\n"
                 "Nhắn /tasks để xem tất cả nhắc nhở."
             ),
             parse_mode="Markdown",

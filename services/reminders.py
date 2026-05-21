@@ -61,12 +61,18 @@ def _mood_keyboard(checkin_id: int) -> InlineKeyboardMarkup:
 # --- Job actions ---------------------------------------------------------
 
 async def _send_checkin(app: Application, task_id: int, user_id: int, title: str) -> None:
-    # Skip if user paused/blocked
+    # Skip if user paused/blocked, OR this specific task was paused via /pause <id>
     row = conn().execute(
         "SELECT status FROM users WHERE tg_id = ?", (user_id,)
     ).fetchone()
     if not row or row["status"] != "active":
         log.info("Skip check-in for user %s (status=%s)", user_id, row["status"] if row else "missing")
+        return
+    t_row = conn().execute(
+        "SELECT active FROM tasks WHERE id = ?", (task_id,)
+    ).fetchone()
+    if not t_row or not t_row["active"]:
+        log.info("Skip check-in: task %s is paused", task_id)
         return
 
     text = (
@@ -97,15 +103,24 @@ async def _send_checkin(app: Application, task_id: int, user_id: int, title: str
         log.exception("Failed to send check-in to %s: %s", user_id, e)
         return
 
-    # Arm follow-ups
+    # Arm follow-ups — respect per-task config
     s = settings()
-    nudge_at = datetime.now(timezone.utc) + timedelta(hours=s.reminder_nudge_hours)
+    task_cfg = conn().execute(
+        "SELECT nudge_hours, max_nudges FROM tasks WHERE id = ?", (task_id,)
+    ).fetchone()
+    nudge_hours = (task_cfg["nudge_hours"] if task_cfg and task_cfg["nudge_hours"] is not None
+                   else s.reminder_nudge_hours)
+    max_nudges = task_cfg["max_nudges"] if task_cfg else 1
+
+    if max_nudges > 0 and nudge_hours > 0:
+        nudge_at = datetime.now(timezone.utc) + timedelta(hours=nudge_hours)
+        scheduler().add_job(
+            _send_nudge, DateTrigger(run_date=nudge_at),
+            args=[app, checkin_id, user_id, title],
+            id=_job_id_nudge(checkin_id), replace_existing=True,
+        )
+
     miss_at = datetime.now(timezone.utc) + timedelta(hours=s.reminder_miss_hours)
-    scheduler().add_job(
-        _send_nudge, DateTrigger(run_date=nudge_at),
-        args=[app, checkin_id, user_id, title],
-        id=_job_id_nudge(checkin_id), replace_existing=True,
-    )
     scheduler().add_job(
         _mark_missed, DateTrigger(run_date=miss_at),
         args=[checkin_id, user_id],
