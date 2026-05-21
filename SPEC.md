@@ -1,8 +1,9 @@
-# Soul Coach Telegram Bot — Specification (v2.6)
+# Soul Coach Telegram Bot — Specification (v2.7)
 
 > Source of truth for implementation. Updated as features land.
 >
-> **v2.6** (current): Pending-review KB queue, dedup gate, auto-keyword extraction, multi-model + multi-key LLM failover with 5xx handling, offline empathy fallback, logrotate.
+> **v2.7** (current): Friendly time parser, timezone aliases + `/tz` command, per-task pause/resume by id, per-task nudge config (`/nudge`), improved welcome and help.
+> v2.6: Pending-review KB queue, dedup gate, auto-keyword extraction, multi-model + multi-key LLM failover with 5xx handling, offline empathy fallback, logrotate.
 > v2.5: Vietnamese KB + UI, /debug, /settask, escalation auto-clear, token optimization (~75% reduction), multi-key failover, typing indicator.
 
 ---
@@ -34,7 +35,8 @@ A proactive Telegram bot that acts as a mental coach: pings users for scheduled 
 
 ```sql
 users(tg_id PK, name, tz, joined_at, status)              -- active|paused|blocked
-tasks(id PK, user_id FK, title, cron_expr, active)
+tasks(id PK, user_id FK, title, cron_expr, active,
+      nudge_hours NULL, max_nudges)                       -- per-task nudge config
 check_ins(id PK, task_id FK, user_id FK, sent_at, replied_at,
           reply_text, mood INT, status)                   -- pending|answered|missed
 interactions(id PK, user_id, ts, direction, text, intent,
@@ -49,7 +51,9 @@ reports(id PK, week_start, week_end, payload_json, sent_at)
 audit_log(id PK, ts, actor, action, target)
 ```
 
-**Migrations**: `db._migrate()` runs idempotently on boot. Currently adds `kb_entries.status` column for existing DBs.
+**Migrations**: `db._migrate()` runs idempotently on boot.
+- v2.6: adds `kb_entries.status`
+- v2.7: adds `tasks.nudge_hours` (NULL = use global default) and `tasks.max_nudges` (0 = no follow-up nudges)
 
 ## 5. State Machine (per user)
 
@@ -78,11 +82,26 @@ ESCALATED ── /resolve OR auto-clear after 24h ──▶ IDLE (counter=0)
 
 ## 6. Functional Modules
 
-### 6.1 Onboarding
-`/start` registers user → prompts for timezone (validated with `pytz`). Invalid/missing reply keeps `DEFAULT_TZ`.
+### 6.1 Onboarding & Timezone
+`/start` registers user → prompts for timezone with concrete examples ("Hanoi, Tokyo, +7").
+- `services.tz_aliases.resolve_tz()` accepts:
+  - Exact IANA names (`Asia/Ho_Chi_Minh`)
+  - City/country aliases — case-insensitive, diacritic-insensitive (`Hà Nội`, `vietnam`, `vn`, `HCM`, `saigon`, `Tokyo`, `Singapore`, `London`, `NYC`, …)
+  - UTC offsets (`+7`, `UTC-5`, `GMT+9`) → mapped to `Etc/GMT-N` (POSIX-flipped sign)
+- Unknown input: bot replies with retry hints and keeps user in awaiting state
+- `skip` (or `bỏ qua`) → keep default
+- **`/tz [arg]`** can be invoked any time: no arg shows current; arg resolves and updates
 
 ### 6.2 Proactive Reminders
-APScheduler fires per active task → mood-scale inline keyboard (😣😕😐🙂😄). 12h nudge → 24h missed. `/pause` and `/resume` actually suspend/resume scheduler jobs (not just status flip).
+APScheduler fires per active task → mood-scale inline keyboard (😣😕😐🙂😄). Follow-ups respect per-task config from `tasks` table:
+- `nudge_hours` (NULL = global `REMINDER_NUDGE_HOURS`, 0 = no nudge)
+- `max_nudges` (0 = no follow-up; 1 = single nudge — current default)
+
+`/pause` and `/resume` accept an optional `<task_id>` arg:
+- `/pause` (no arg) — flip `users.status='paused'` + pause every active job for the user
+- `/pause <id>` — flip `tasks.active=0` for that one task + pause its job only
+- `/resume` / `/resume <id>` — symmetric
+- `_send_checkin` skips if either `users.status != 'active'` OR `tasks.active = 0`
 
 ### 6.3 Crisis Pre-filter
 EN+VI keyword substring match before any LLM call. On match → safe-messaging reply with hotline; no escalation, no `log_out` row (so it doesn't pollute interaction history).
@@ -126,19 +145,41 @@ Three triggers (`kb_miss`, `counter`, `manual`) → DM S with last 5 turns + Res
 ### 6.9 Weekly Report
 Cron Sunday 18:00 (S timezone). Aggregates the past 7 days per user (compliance, mood trend, escalations) and globally (top KB hits, top KB misses, **pending KB count**). Markdown table + JSON attachment. Snippets redacted by default; verbatim view via `/transcript` (audit-logged).
 
-### 6.10 Health & Monitoring
+### 6.10 Friendly Time Parser (`services/timeparser.py`)
+
+Translates natural-language schedules into 5-field cron. Used by `/addtask` and `/settask`. Accepts EN+VI:
+
+| Input | Output cron | Summary shown to user |
+|---|---|---|
+| `0 8 * * *` | passthrough | `mỗi ngày lúc 08:00` |
+| `daily 22:30` | `30 22 * * *` | `mỗi ngày lúc 22:30` |
+| `weekdays 9:00` | `0 9 * * 1-5` | `thứ 2 đến thứ 6 lúc 09:00` |
+| `weekends 10:00` | `0 10 * * 0,6` | `cuối tuần lúc 10:00` |
+| `every monday 8:00` | `0 8 * * 1` | `thứ 2 lúc 08:00` |
+| `t2 t4 t6 7:00` | `0 7 * * 1,3,5` | `thứ 2, thứ 4, thứ 6 lúc 07:00` |
+| `every 6 hours` | `0 */6 * * *` | `mỗi 6 giờ` |
+| `every 30 minutes` | `*/30 * * * *` | `mỗi 30 phút` |
+
+Failure returns a friendly help text with worked examples — used as the `/addtask` error message.
+
+### 6.11 Health & Monitoring
 `/health` HTTP endpoint on `HEALTH_PORT` (default 8080) for UptimeRobot. `/debug` supervisor command shows live snapshot: users, active+pending KB counts, open escalations, recent LLM replies.
 
 ## 7. Commands
+
+> v2.7 changes: `/tz`, `/nudge`, per-task `/pause`/`/resume <id>`, friendly time in `/addtask` + `/settask`.
 
 | Command | Who | Purpose |
 |---|---|---|
 | `/start` | U | Register, onboarding + timezone prompt |
 | `/help` | U | Usage |
 | `/tasks` | U | List my reminders |
-| `/addtask <title> \| <cron>` | U | Add reminder |
+| `/tz [city\|country\|offset]` | U | View or change timezone (e.g. `/tz Tokyo`, `/tz +7`) |
+| `/addtask <title> \| <time>` | U | Add reminder. Time = friendly (`daily 22:30`, `weekdays 9:00`, `every 6 hours`) OR 5-field cron |
 | `/removetask <id>` | U | Remove |
-| `/pause`, `/resume` | U | Suspend/resume scheduler jobs |
+| `/pause [task_id]` | U | Pause one task (with id) or all (no id) |
+| `/resume [task_id]` | U | Resume one task or all |
+| `/nudge <task_id> <hours>` | U | Set per-task nudge interval. `0` disables follow-up nudges |
 | `/talk_to_human` | U | Manual escalation |
 | `/report` | S | On-demand weekly report |
 | `/resolve <user_id>` | S | Close escalation |

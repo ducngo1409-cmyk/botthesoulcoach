@@ -1,4 +1,4 @@
-# Soul Coach Bot — Test Plan (v2.6)
+# Soul Coach Bot — Test Plan (v2.7)
 
 Two automated test suites cover all logic that doesn't require live credentials.
 Manual integration tests are listed for first-run verification before going to production.
@@ -19,11 +19,12 @@ Manual integration tests are listed for first-run verification before going to p
 | 6 | `satisfaction.classify` — 5 cases EN+VI |
 | 7 | Satisfaction counter increment / reset cycle |
 | 8 | KB CRUD round-trip: add → get → edit → delete |
-| 9 | Cron expression validation |
-| 10 | `kb.search()` ignores `status='pending'` entries |
-| 11 | `kb.has_similar()` returns existing entry above threshold |
-| 12 | `kb.extract_keywords()` strips VI+EN stopwords |
-| 13 | `kb.approve()` flips pending → active and updates cache |
+| 9 | Cron + friendly time parser (`daily 22:30`, `weekdays 9:00`, `every 6 hours`) |
+| 10 | Timezone alias resolver (`Hanoi` → `Asia/Ho_Chi_Minh`, `+7` → `Etc/GMT-7`) |
+| 11 | `kb.search()` ignores `status='pending'` entries |
+| 12 | `kb.has_similar()` returns existing entry above threshold |
+| 13 | `kb.extract_keywords()` strips VI+EN stopwords |
+| 14 | `kb.approve()` flips pending → active and updates cache |
 
 ```bash
 python -m tests.test_smoke
@@ -73,9 +74,15 @@ python main.py
 - [ ] `GET :8080/health` → `200 ok`
 - [ ] DB at `data/soul_coach.db`; `_migrate()` log line shows if column added
 
-### 2.2 Onboarding
-- [ ] `/start` → welcome + tz prompt
-- [ ] `Asia/Tokyo` → confirmation
+### 2.2 Onboarding (v2.7)
+- [ ] `/start` → "Xin chào X, mình là *Soul Coach* của bạn." + tz prompt with city examples
+- [ ] Reply `Hanoi` → `Đã đặt múi giờ Asia/Ho_Chi_Minh`
+- [ ] Reply `Tokyo` → `Asia/Tokyo`
+- [ ] Reply `+7` → `Etc/GMT-7`
+- [ ] Reply `not a real place` → friendly retry message, user stays in tz-awaiting state
+- [ ] Reply `skip` → keeps default, no further prompt
+- [ ] `/tz` (no arg) → shows current tz
+- [ ] `/tz Singapore` → updates to Asia/Singapore
 - [ ] `/start` again → welcome-back, no tz prompt
 
 ### 2.3 KB Q&A
@@ -104,11 +111,19 @@ python main.py
 - [ ] **Dedup gate**: 👍 on LLM reply for a question very similar to an existing active entry → no pending entry created (log: `Auto-promote skipped`)
 - [ ] **Length gate**: very short user question (< 4 chars) → no pending entry created
 
-### 2.7 Reminders
-- [ ] `/addtask Test | * * * * *` → check-in DM within 90s
-- [ ] Mood emoji → `Mood logged`
-- [ ] `/pause` → 🔕; no new check-in for ≥ 1 minute
-- [ ] `/resume` → 🔔; check-in resumes
+### 2.7 Reminders + per-task control (v2.7)
+- [ ] `/addtask` (no args) → shows friendly examples block
+- [ ] `/addtask Thiền | daily 7:00` → confirmation with `⏰ mỗi ngày lúc 07:00` and cron `0 7 * * *`
+- [ ] `/addtask Họp | weekdays 9:00` → cron `0 9 * * 1-5`
+- [ ] `/addtask Uống nước | every 3 hours` → cron `0 */3 * * *`
+- [ ] `/addtask Test | * * * * *` → check-in DM within 90s; mood emoji works
+- [ ] **Per-task pause**: `/pause <id1>` → only that task pauses; other tasks still fire
+- [ ] `/resume <id1>` → only that task resumes
+- [ ] `/pause` (no arg) → 🔕 "*tất cả* N nhắc nhở"
+- [ ] `/resume` (no arg) → 🔔 "đã bật lại N nhắc nhở"
+- [ ] **Per-task nudge**: `/nudge <id> 0` → user gets no follow-up after missed check-in
+- [ ] `/nudge <id> 6` → nudge fires 6h after check-in
+- [ ] `/tasks` → shows pause state + nudge config per task
 - [ ] `/removetask <id>` → removed
 
 ### 2.8 Escalation
@@ -118,8 +133,9 @@ python main.py
 - [ ] Tap "Mark resolved" or `/resolve <uid>` → user gets reactivation message
 - [ ] Restart bot with > 24h-old unresolved escalation → auto-cleared on startup
 
-### 2.9 Supervisor task assignment
-- [ ] `/settask <uid> | Uống nước | 0 9 * * *` → S confirmation + user receives DM
+### 2.9 Supervisor task assignment (friendly time supported)
+- [ ] `/settask <uid> | Uống nước | daily 9:00` → S confirmation + user DM both show `⏰ mỗi ngày lúc 09:00`
+- [ ] `/settask <uid> | Họp | weekdays 14:00` → S receives `⏰ thứ 2 đến thứ 6 lúc 14:00`
 - [ ] User `/tasks` → new entry visible
 
 ### 2.10 /debug
@@ -147,7 +163,7 @@ python main.py
 ## 3. Regression checklist before merge
 
 ```
-[ ] python -m tests.test_smoke  — passes
+[ ] python -m tests.test_smoke  — passes (14 checks)
 [ ] python -m tests.test_unit   — passes
 [ ] No new imports of rapidfuzz.WRatio (use token_set_ratio only)
 [ ] No new raw os.environ access — must go through config.settings()
@@ -155,6 +171,9 @@ python main.py
 [ ] kb.search() still filters status='active'
 [ ] _promote_to_kb still inserts status='pending' (never directly active)
 [ ] LLM failover loop still continues on 429 / 5xx / empty / network — never raises mid-loop
+[ ] /addtask + /settask both route time through services.timeparser.parse()
+[ ] tz onboarding + /tz both route input through services.tz_aliases.resolve_tz()
+[ ] _send_checkin checks both users.status AND tasks.active
 ```
 
 ---

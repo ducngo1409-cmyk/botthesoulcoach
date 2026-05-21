@@ -1,4 +1,4 @@
-# Soul Coach — Telegram Bot (v2.6)
+# Soul Coach — Telegram Bot (v2.7)
 
 A Vietnamese-first mental-coach Telegram bot. Pings users for task check-ins, answers
 from a curated Knowledge Base (KB), uses Gemini Flash as a grounded RAG fallback
@@ -7,6 +7,14 @@ report.
 
 See [SPEC.md](SPEC.md) for the full design and [TESTPLAN.md](TESTPLAN.md) for
 the complete test strategy.
+
+## What's new in v2.7
+
+- **Friendly time format** in `/addtask` and `/settask`: `daily 22:30`, `weekdays 9:00`, `every 6 hours`, `every monday 8:00` — raw cron still works.
+- **Timezone aliases** + `/tz` command: type `Hanoi`, `Tokyo`, `Vietnam`, `+7`, `UTC-5` instead of needing the exact IANA name.
+- **Per-task pause/resume**: `/pause 3` or `/resume 3` controls a single reminder. No-arg form keeps the legacy "all" behavior.
+- **Per-task nudge config**: `/nudge <task_id> <hours>` sets how long the bot waits before sending a follow-up nudge. `0` disables nudges for that task.
+- **Improved welcome + help**: "Xin chào X, mình là Soul Coach của bạn" + concrete examples in every command description.
 
 ## What's new in v2.6
 
@@ -68,12 +76,18 @@ sudo tail -f /home/hallo_5ambloom/Bot_The_Soul_Coach/logs/bot.err.log \
 Healthy line: `LLM tokens [gemini-2.5-flash-lite key 0]: in=187 out=82 total=269`.
 Auto-recovery from 503: a `LLM 503 …` warning followed immediately by a successful `tokens` line on a different model.
 
+User Telegram commands:
+- `/tz [city|offset]` — view / change timezone (e.g. `/tz Tokyo`, `/tz +7`)
+- `/addtask <title> | <time>` — time is friendly OR cron
+- `/tasks`, `/removetask <id>`, `/pause [id]`, `/resume [id]`, `/nudge <id> <hours>`
+- `/talk_to_human` — connect to a human coach
+
 Supervisor Telegram commands:
 - `/debug` — live snapshot (users, KB active+pending, escalations, recent LLM replies)
 - `/kb_pending`, `/kb_approve <id>`, `/kb_reject <id>` — manage pending review queue
 - `/report` — on-demand weekly report
 - `/resolve <uid>` — close a stuck escalation
-- `/settask <uid> | <title> | <cron>` — assign a reminder to a user
+- `/settask <uid> | <title> | <time>` — assign a reminder (friendly time supported)
 
 ## Production deploy
 
@@ -98,8 +112,8 @@ schema.sql       DDL (10 tables; kb_entries.status added in v2.6)
 main.py          entry point
 
 handlers/
-  onboarding.py  /start, tz prompt
-  tasks.py       /addtask /removetask /pause /resume /tasks
+  onboarding.py  /start, tz prompt, /tz, /help
+  tasks.py       /addtask /removetask /pause [id] /resume [id] /nudge /tasks
   qa.py          crisis → KB → Gemini RAG → offline empathy
   escalation.py  /talk_to_human, resolve callback
   admin.py       /kb_* /report /users /transcript /settask /debug
@@ -107,8 +121,10 @@ handlers/
 services/
   kb.py          CRUD + status filter + dedup + keyword extraction
   llm.py         multi-model + multi-key failover, 429/5xx/empty
+  timeparser.py  friendly time → cron (VI + EN)
+  tz_aliases.py  city / country / offset → IANA
   satisfaction.py hybrid classifier + counter
-  reminders.py   APScheduler + mood callback
+  reminders.py   APScheduler + per-task nudge config + mood callback
   reports.py     weekly aggregate
   health.py      HTTP health daemon
 
