@@ -5,8 +5,22 @@ from a curated Knowledge Base (KB), uses Gemini Flash as a grounded RAG fallback
 on KB miss, escalates to a human Supervisor (S) when needed, and DMs S a weekly
 report.
 
-See [SPEC.md](SPEC.md) for the full design and [TESTPLAN.md](TESTPLAN.md) for
-the complete test strategy.
+## Documentation
+
+| Audience | Document |
+|---|---|
+| End user | [USER_GUIDE.md](USER_GUIDE.md) — Vietnamese, 5-min read |
+| Supervisor / Admin | [ADMIN_GUIDE.md](ADMIN_GUIDE.md) — operation + escalation + KB review |
+| Developer | [SPEC.md](SPEC.md) — full design |
+| QA | [TESTPLAN.md](TESTPLAN.md) — test strategy |
+| DevOps | [deploy/GCP_DEPLOY.md](deploy/GCP_DEPLOY.md) — step-by-step deploy |
+
+## What's new in v2.7.1
+
+- **Allowlist gate** — set `ALLOWED_USER_IDS=<id1>,<id2>` in `.env` to restrict bot to invited users. Empty = open access (legacy).
+- **Mandatory onboarding** — new users must finish setting timezone before using other commands; bot will gently remind them instead of letting commands silently no-op.
+- **Onboarding skip bug fixed** — "không" / "khong" no longer accidentally triggers skip (was matching a very common Vietnamese word). Only explicit `skip`, `bỏ qua`, `/skip` keywords work now.
+- New docs: [USER_GUIDE.md](USER_GUIDE.md), [ADMIN_GUIDE.md](ADMIN_GUIDE.md).
 
 ## What's new in v2.7
 

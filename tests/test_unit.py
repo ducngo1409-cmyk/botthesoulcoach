@@ -196,7 +196,8 @@ class TestTimezonePrompt(unittest.IsolatedAsyncioTestCase):
         row = db.conn().execute("SELECT tz FROM users WHERE tg_id = ?", (user_id,)).fetchone()
         self.assertEqual(row["tz"], "America/New_York")
 
-    async def test_invalid_tz_clears_flag_with_warning(self):
+    async def test_invalid_tz_keeps_user_in_awaiting_state(self):
+        """v2.7: invalid tz reply keeps user in awaiting state so they can retry."""
         from handlers import onboarding
 
         user_id = 8004
@@ -209,10 +210,41 @@ class TestTimezonePrompt(unittest.IsolatedAsyncioTestCase):
 
         handled = await onboarding.handle_tz_reply(update, ctx)
         self.assertTrue(handled)
-        self.assertFalse(onboarding.is_awaiting_tz(user_id))
+        # User stays in awaiting state — they can retry without /start
+        self.assertTrue(onboarding.is_awaiting_tz(user_id))
         update.message.reply_text.assert_called_once()
         warning = update.message.reply_text.call_args[0][0]
         self.assertIn("⚠️", warning)
+
+    async def test_explicit_skip_clears_flag(self):
+        """v2.7: only 'skip'/'bỏ qua' keywords clear the flag."""
+        from handlers import onboarding
+
+        user_id = 8005
+        with db.transaction() as cx:
+            cx.execute("INSERT OR IGNORE INTO users (tg_id, name) VALUES (?, ?)", (user_id, "Skipper"))
+        onboarding._awaiting_tz.add(user_id)
+
+        update = _mock_update(user_id=user_id, text="skip")
+        ctx = _mock_context()
+        handled = await onboarding.handle_tz_reply(update, ctx)
+        self.assertTrue(handled)
+        self.assertFalse(onboarding.is_awaiting_tz(user_id))
+
+    async def test_khong_does_not_skip_onboarding(self):
+        """v2.7 regression: 'không' is a common word and must NOT trigger skip."""
+        from handlers import onboarding
+
+        user_id = 8006
+        with db.transaction() as cx:
+            cx.execute("INSERT OR IGNORE INTO users (tg_id, name) VALUES (?, ?)", (user_id, "Khong"))
+        onboarding._awaiting_tz.add(user_id)
+
+        update = _mock_update(user_id=user_id, text="không")
+        ctx = _mock_context()
+        await onboarding.handle_tz_reply(update, ctx)
+        # Should stay in awaiting state and get a retry prompt
+        self.assertTrue(onboarding.is_awaiting_tz(user_id))
 
 
 # =============================================================================

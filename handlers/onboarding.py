@@ -46,9 +46,12 @@ async def handle_tz_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     _awaiting_tz.discard(user.id)
     text = (update.message.text or "").strip()
 
-    if text.lower() in {"skip", "bo qua", "bỏ qua", "khong", "không"}:
+    # Explicit skip only — "không" alone is too risky (it's a very common VI word).
+    # User must type the exact keyword to skip onboarding.
+    if text.lower().strip() in {"skip", "bỏ qua", "bo qua", "/skip"}:
         await update.message.reply_text(
-            "👌 Giữ múi giờ mặc định. Bạn có thể đổi sau bằng `/tz <múi giờ>`.",
+            "👌 Giữ múi giờ mặc định *Asia/Ho_Chi_Minh*. "
+            "Đổi bất cứ lúc nào bằng `/tz <thành phố>`.",
             parse_mode="Markdown",
         )
         return True

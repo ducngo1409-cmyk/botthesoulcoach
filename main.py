@@ -19,12 +19,13 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
 import db
 from config import settings
-from handlers import admin, escalation, onboarding, qa, tasks
+from handlers import access, admin, escalation, onboarding, qa, tasks
 from services import reminders
 from services.health import start_health_server
 
@@ -43,6 +44,11 @@ def _setup_logging(level: str) -> None:
 
 
 def _register_handlers(app: Application) -> None:
+    # --- Access gate (allowlist + mandatory onboarding) ---
+    # group=-1 runs before everything else; gate raises ApplicationHandlerStop
+    # to drop the update entirely if access is denied or onboarding incomplete.
+    app.add_handler(TypeHandler(Update, access.gate), group=-1)
+
     # --- Commands (user) ---
     app.add_handler(CommandHandler("start", onboarding.start))
     app.add_handler(CommandHandler("help", onboarding.help_cmd))

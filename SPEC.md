@@ -1,8 +1,9 @@
-# Soul Coach Telegram Bot — Specification (v2.7)
+# Soul Coach Telegram Bot — Specification (v2.7.1)
 
 > Source of truth for implementation. Updated as features land.
 >
-> **v2.7** (current): Friendly time parser, timezone aliases + `/tz` command, per-task pause/resume by id, per-task nudge config (`/nudge`), improved welcome and help.
+> **v2.7.1** (current): Allowlist access gate, mandatory onboarding enforcement, fix "không" skip-keyword regression, USER_GUIDE + ADMIN_GUIDE.
+> v2.7: Friendly time parser, timezone aliases + `/tz` command, per-task pause/resume by id, per-task nudge config (`/nudge`), improved welcome and help.
 > v2.6: Pending-review KB queue, dedup gate, auto-keyword extraction, multi-model + multi-key LLM failover with 5xx handling, offline empathy fallback, logrotate.
 > v2.5: Vietnamese KB + UI, /debug, /settask, escalation auto-clear, token optimization (~75% reduction), multi-key failover, typing indicator.
 
@@ -81,6 +82,17 @@ ESCALATED ── /resolve OR auto-clear after 24h ──▶ IDLE (counter=0)
 ```
 
 ## 6. Functional Modules
+
+### 6.0 Access Gate (v2.7.1)
+`handlers/access.gate` is a `TypeHandler` installed at `group=-1` (runs before any feature handler). Raises `ApplicationHandlerStop` to drop unauthorized updates entirely.
+
+**Two gates in order:**
+
+1. **Allowlist** — if `ALLOWED_USER_IDS` env var is non-empty: only listed IDs + supervisor pass. Others receive a "private bot" message (once per user per process), then all subsequent updates from them are silently dropped.
+
+2. **Mandatory onboarding** — if `REQUIRE_ONBOARDING=1` (default): registered users still in `_awaiting_tz` state can only invoke `/start`, `/help`, `/tz`, `/talk_to_human`, or send free text (which routes through `handle_tz_reply`). Other commands trigger a gentle "finish tz first" reminder.
+
+Both gates are env-toggleable. Open access (legacy) is preserved by leaving `ALLOWED_USER_IDS` empty.
 
 ### 6.1 Onboarding & Timezone
 `/start` registers user → prompts for timezone with concrete examples ("Hanoi, Tokyo, +7").
@@ -214,6 +226,8 @@ Failure returns a friendly help text with worked examples — used as the `/addt
 | `SAT_THRESHOLD` | `10` | LLM tries before escalating |
 | `LOG_LEVEL` | `INFO` | |
 | `HEALTH_PORT` | `8080` | |
+| `ALLOWED_USER_IDS` | _(empty)_ | Comma-separated allowlist. Empty = open. Supervisor always allowed. |
+| `REQUIRE_ONBOARDING` | `1` | `0` to allow new users to use commands before setting tz |
 
 ## 9. Reliability & Continuous Operation
 
