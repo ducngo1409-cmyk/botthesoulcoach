@@ -7,8 +7,11 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
 from config import settings
 from db import conn, transaction
+from handlers import access
 from services import kb
 
 log = logging.getLogger(__name__)
@@ -79,18 +82,137 @@ async def report_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await send_weekly_report(context.application)
 
 
+async def pending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/pending — list users awaiting access approval."""
+    if not _is_supervisor(update):
+        return
+    pending = access.list_pending()
+    if not pending:
+        await update.message.reply_text("✨ Không có user nào đang chờ duyệt.")
+        return
+    lines = [f"⏳ *{len(pending)} user đang chờ duyệt*\n"]
+    for u in pending:
+        lines.append(
+            f"• `{u['tg_id']}` — {u['name'] or '?'}\n"
+            f"  /approve {u['tg_id']}   /reject {u['tg_id']}\n"
+        )
+    text = "\n".join(lines)
+    if len(text) > 3500:
+        text = text[:3500] + "\n…(truncated)"
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/approve <user_id> — approve a pending user."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/approve <user_id>`", parse_mode="Markdown"
+        )
+        return
+    try:
+        target_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+
+    if access.approve_user(target_id):
+        await update.message.reply_text(f"✅ Đã duyệt user `{target_id}`.", parse_mode="Markdown")
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=(
+                    "✅ Yêu cầu truy cập của bạn đã được chấp nhận!\n\n"
+                    "Bắt đầu bằng cách nhắn /start hoặc /help để xem các lệnh."
+                ),
+            )
+        except Exception:
+            log.warning("Could not notify approved user %s", target_id)
+        log.info("Supervisor approved user %s", target_id)
+    else:
+        await update.message.reply_text(
+            f"User `{target_id}` không ở trạng thái pending (có thể đã duyệt hoặc chưa tồn tại).",
+            parse_mode="Markdown",
+        )
+
+
+async def reject_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/reject <user_id> — reject a pending user."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/reject <user_id>`", parse_mode="Markdown"
+        )
+        return
+    try:
+        target_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+
+    if access.reject_user(target_id):
+        await update.message.reply_text(f"🚫 Đã từ chối user `{target_id}`.", parse_mode="Markdown")
+        log.info("Supervisor rejected user %s", target_id)
+    else:
+        await update.message.reply_text(f"User `{target_id}` không tồn tại.", parse_mode="Markdown")
+
+
+async def user_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inline button on the pending-user DM: ✅ Duyệt / ❌ Từ chối."""
+    if not _is_supervisor(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    try:
+        action, target_id = query.data.split(":")
+        target_id = int(target_id)
+    except Exception:
+        return
+
+    if action == "usr_app":
+        ok = access.approve_user(target_id)
+        msg = f"✅ Đã duyệt user {target_id}" if ok else f"User {target_id} không pending"
+        if ok:
+            try:
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text=(
+                        "✅ Yêu cầu truy cập của bạn đã được chấp nhận!\n\n"
+                        "Bắt đầu bằng cách nhắn /start hoặc /help để xem các lệnh."
+                    ),
+                )
+            except Exception:
+                log.warning("Could not notify approved user %s", target_id)
+    else:
+        ok = access.reject_user(target_id)
+        msg = f"🚫 Đã từ chối user {target_id}" if ok else f"User {target_id} không tồn tại"
+
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.edit_message_text((query.message.text or "") + f"\n\n{msg}")
+    except Exception:
+        await context.bot.send_message(settings().supervisor_chat_id, msg)
+
+
 async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_supervisor(update):
         return
     rows = conn().execute(
-        "SELECT tg_id, name, status, joined_at FROM users ORDER BY joined_at"
+        "SELECT tg_id, name, status, access_status, joined_at FROM users ORDER BY joined_at"
     ).fetchall()
     if not rows:
         await update.message.reply_text("No users registered yet.")
         return
     lines = ["👥 *Users*"]
+    badge = {"approved": "✅", "pending": "⏳", "rejected": "🚫"}
     for r in rows:
-        lines.append(f"• `{r['tg_id']}` *{r['name'] or '?'}* — {r['status']} — joined {r['joined_at']}")
+        b = badge.get(r["access_status"], "?")
+        lines.append(
+            f"{b} `{r['tg_id']}` *{r['name'] or '?'}* — "
+            f"{r['status']} — joined {r['joined_at']}"
+        )
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 

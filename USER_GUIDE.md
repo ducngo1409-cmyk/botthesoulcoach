@@ -16,7 +16,13 @@ Soul Coach là người bạn nhắc nhở và lắng nghe trên Telegram. Bot g
 /start
 ```
 
-Bot sẽ chào bạn và hỏi *bạn đang ở thành phố nào*. Trả lời tên thành phố hoặc quốc gia bằng tiếng Anh hoặc tiếng Việt — bot hiểu cả hai:
+**Lần đầu tiên dùng**, bot sẽ trả lời:
+> 🔒 Yêu cầu của bạn đã được gửi đến admin để duyệt. Bạn sẽ nhận được tin nhắn ngay khi được chấp nhận.
+
+Đợi admin duyệt — thường rất nhanh. Khi được duyệt, bạn sẽ nhận tin:
+> ✅ Yêu cầu truy cập của bạn đã được chấp nhận!
+
+Sau đó gõ `/start` lần nữa và bot sẽ chào bạn, hỏi *bạn đang ở thành phố nào*. Trả lời tên thành phố hoặc quốc gia bằng tiếng Anh hoặc tiếng Việt — bot hiểu cả hai:
 
 - `Hanoi` / `Hà Nội` / `HCM` / `Saigon` / `Vietnam` / `VN`
 - `Tokyo` / `Singapore` / `Bangkok` / `London` / `Paris` / `New York`
@@ -170,8 +176,8 @@ A: Gõ `/pause` (không kèm số). Khi về lại, gõ `/resume`.
 **Q: Bot không trả lời tin nhắn của tôi?**
 A: Có thể bạn chưa hoàn thành bước cài múi giờ. Gõ `/start` để bắt đầu lại.
 
-**Q: Tôi không phải người được mời nhưng vẫn tìm thấy bot?**
-A: Bot này có thể đang ở chế độ riêng tư. Liên hệ admin và gửi `user_id` của bạn để được thêm vào danh sách.
+**Q: Tôi gõ /start nhưng bot bảo "đang chờ duyệt" — phải làm sao?**
+A: Admin chưa duyệt yêu cầu của bạn. Đợi một chút — admin sẽ nhận được DM kèm nút "Duyệt", thường rất nhanh. Trong khi chờ, bạn không cần làm gì thêm.
 
 ---
 

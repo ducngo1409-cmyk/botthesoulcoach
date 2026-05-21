@@ -42,8 +42,8 @@ class Settings:
     log_level: str
     health_port: int
     project_root: Path
-    allowed_user_ids: frozenset[int]  # empty = open access; non-empty = allowlist enforced
-    require_onboarding: bool          # if True, block non-essential cmds until tz is set
+    require_approval: bool        # if True, new users start as pending — admin must approve
+    require_onboarding: bool      # if True, block non-essential cmds until tz is set
 
 
 def load_settings() -> Settings:
@@ -51,11 +51,6 @@ def load_settings() -> Settings:
     if not db_path.is_absolute():
         db_path = PROJECT_ROOT / db_path
     db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    allow_raw = os.getenv("ALLOWED_USER_IDS", "").strip()
-    allowed = frozenset(
-        int(x) for x in allow_raw.replace(",", " ").split() if x.strip().lstrip("-").isdigit()
-    )
 
     return Settings(
         telegram_token=_req("TELEGRAM_TOKEN"),
@@ -73,7 +68,7 @@ def load_settings() -> Settings:
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         health_port=_int("HEALTH_PORT", 8080),
         project_root=PROJECT_ROOT,
-        allowed_user_ids=allowed,
+        require_approval=os.getenv("REQUIRE_APPROVAL", "1").lower() not in ("0", "false", "no"),
         require_onboarding=os.getenv("REQUIRE_ONBOARDING", "1").lower() not in ("0", "false", "no"),
     )
 

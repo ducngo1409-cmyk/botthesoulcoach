@@ -76,12 +76,16 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("kb_reject", admin.kb_reject))
     app.add_handler(CommandHandler("settask", admin.settask))
     app.add_handler(CommandHandler("debug", admin.debug_cmd))
+    app.add_handler(CommandHandler("pending", admin.pending_cmd))
+    app.add_handler(CommandHandler("approve", admin.approve_cmd))
+    app.add_handler(CommandHandler("reject", admin.reject_cmd))
 
     # --- Callback queries ---
     app.add_handler(CallbackQueryHandler(reminders.mood_callback, pattern=r"^mood:"))
     app.add_handler(CallbackQueryHandler(qa.feedback_callback, pattern=r"^sat:"))
     app.add_handler(CallbackQueryHandler(escalation.resolve_callback, pattern=r"^resolve:"))
     app.add_handler(CallbackQueryHandler(admin.kb_review_callback, pattern=r"^kb_(app|rej):"))
+    app.add_handler(CallbackQueryHandler(admin.user_review_callback, pattern=r"^usr_(app|rej):"))
 
     # --- Free-text messages (must be last) ---
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, qa.on_user_message))

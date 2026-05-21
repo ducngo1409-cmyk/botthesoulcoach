@@ -76,6 +76,19 @@ def _migrate() -> None:
         conn().execute("ALTER TABLE users ADD COLUMN onboarded INTEGER NOT NULL DEFAULT 1")
         log.info("Migration: added users.onboarded column (existing users = 1)")
 
+    # users.access_status (v2.8) — request-to-join approval queue
+    if "access_status" not in ucols:
+        # New column defaults to 'pending' for future inserts; existing rows
+        # explicitly set to 'approved' so we don't lock out current users.
+        conn().execute(
+            "ALTER TABLE users ADD COLUMN access_status TEXT NOT NULL DEFAULT 'pending'"
+        )
+        conn().execute(
+            "UPDATE users SET access_status = 'approved' WHERE access_status = 'pending'"
+        )
+        log.info("Migration: added users.access_status (existing users = approved)")
+    conn().execute("CREATE INDEX IF NOT EXISTS idx_users_access ON users(access_status)")
+
 
 def _clear_stale_escalations() -> None:
     """On startup: auto-resolve escalations open > 24h — prevents users being stuck forever."""

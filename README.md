@@ -1,4 +1,4 @@
-# Soul Coach — Telegram Bot (v2.7)
+# Soul Coach — Telegram Bot (v2.8)
 
 A Vietnamese-first mental-coach Telegram bot. Pings users for task check-ins, answers
 from a curated Knowledge Base (KB), uses Gemini Flash as a grounded RAG fallback
@@ -15,9 +15,20 @@ report.
 | QA | [TESTPLAN.md](TESTPLAN.md) — test strategy |
 | DevOps | [deploy/GCP_DEPLOY.md](deploy/GCP_DEPLOY.md) — step-by-step deploy |
 
+## What's new in v2.8
+
+- **Request-to-join approval** — anyone can search and `/start` the bot, but they're locked in `pending` state until admin approves. Admin gets a DM with inline ✅ Duyệt / ❌ Từ chối buttons. Replaces the previous `ALLOWED_USER_IDS` env-based allowlist (removed).
+- New supervisor commands: `/pending`, `/approve <user_id>`, `/reject <user_id>`. `/users` now shows status badges (✅⏳🚫).
+- New env var `REQUIRE_APPROVAL=0` for dev/test instances that want fully open access.
+
+## What's new in v2.7.2
+
+- **Onboarding state persisted in DB** (`users.onboarded` column) so it survives bot restarts. Previous in-memory `_awaiting_tz` set was the root cause of users getting stuck mid-onboarding.
+- **Strict state-machine isolation** — during onboarding, every input is routed correctly. Garbage text re-prompts, commands get a reminder, callbacks get a toast.
+
 ## What's new in v2.7.1
 
-- **Allowlist gate** — set `ALLOWED_USER_IDS=<id1>,<id2>` in `.env` to restrict bot to invited users. Empty = open access (legacy).
+- (Superseded by v2.8) Allowlist gate via `ALLOWED_USER_IDS` env var.
 - **Mandatory onboarding** — new users must finish setting timezone before using other commands; bot will gently remind them instead of letting commands silently no-op.
 - **Onboarding skip bug fixed** — "không" / "khong" no longer accidentally triggers skip (was matching a very common Vietnamese word). Only explicit `skip`, `bỏ qua`, `/skip` keywords work now.
 - New docs: [USER_GUIDE.md](USER_GUIDE.md), [ADMIN_GUIDE.md](ADMIN_GUIDE.md).

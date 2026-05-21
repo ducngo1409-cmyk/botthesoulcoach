@@ -20,38 +20,53 @@ S đăng nhập bằng chính tài khoản Telegram của mình. Để biết `S
 
 ---
 
-## 2. Cấp quyền truy cập (Allowlist)
+## 2. Cấp quyền truy cập (Request-to-Join)
 
-### 2.1 Hai chế độ
+### 2.1 Cách hoạt động (v2.8)
 
-- **Mở** (default nếu `ALLOWED_USER_IDS` rỗng): ai cũng dùng được — chỉ phù hợp lúc test
-- **Đóng** (allowlist): chỉ user trong danh sách + S có quyền dùng
+Bất kỳ ai search được bot trên Telegram đều có thể gõ `/start`, nhưng:
 
-### 2.2 Cách bật allowlist
+1. User mới được tạo trong DB với `access_status = 'pending'`
+2. Bot trả lời user: "🔒 Yêu cầu đã được gửi đến admin để duyệt..."
+3. **Bạn (S) nhận DM ngay** với 2 nút inline:
+   ```
+   🆕 Yêu cầu truy cập mới
+   👤 Nguyễn Văn A
+   🆔 1338639986
+   📱 @vana
+   
+   [✅ Duyệt]  [❌ Từ chối]
+   ```
+4. Bạn tap **Duyệt** → user nhận thông báo và có thể dùng bot
+5. Bạn tap **Từ chối** → user bị flag `rejected`, không dùng được nữa
 
-Sửa `.env` trên VM:
-```bash
-sudo nano /home/hallo_5ambloom/Bot_The_Soul_Coach/.env
+### 2.2 Lệnh quản lý approval
+
+| Lệnh | Việc làm |
+|---|---|
+| `/pending` | Liệt kê user đang chờ |
+| `/approve <user_id>` | Duyệt (giống tap nút Duyệt) |
+| `/reject <user_id>` | Từ chối (giống tap nút Từ chối) |
+| `/users` | Xem tất cả user với badge ✅⏳🚫 |
+
+### 2.3 Pending users gõ gì cũng bị chặn
+
+- Mỗi 30 giây user pending nhắn gì → bot trả "⏳ đang chờ duyệt" (rate limit)
+- /start lại → bot nhắc lại lần nữa
+- Mọi action khác (callback, command) → drop silently
+
+### 2.4 Bỏ qua approval (chế độ dev/test)
+
+Trong `.env`:
+```
+REQUIRE_APPROVAL=0
 ```
 
-Thêm dòng:
-```
-ALLOWED_USER_IDS=1338639986,8796539835,5076512146
-```
+Restart bot — mọi user mới sẽ auto-approved khi /start. Dùng cho dev/test only.
 
-Restart bot:
-```bash
-sudo systemctl restart soul-coach
-```
+### 2.5 Supervisor luôn được auto-approved
 
-User không trong danh sách khi /start sẽ nhận tin:
-> 🔒 Bot này dành riêng cho một nhóm người dùng được mời. Nếu bạn muốn được thêm vào, vui lòng gửi `user_id` của bạn (12345) cho admin.
-
-### 2.3 Thêm user mới
-
-User gửi `user_id` của họ → S sửa `.env`, thêm ID vào cuối, ngăn cách bằng dấu phẩy → restart bot.
-
-> ⚠️ Không có lệnh `/allow <id>` runtime — đây là chủ ý để giữ quyền cấp phép ngoài app (env-only).
+Bạn (S) không bao giờ rơi vào pending — `SUPERVISOR_CHAT_ID` bypass mọi gate.
 
 ---
 

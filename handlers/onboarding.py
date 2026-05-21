@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from config import settings
@@ -49,40 +49,110 @@ def _mark_onboarded(user_id: int) -> None:
 
 # --- /start --------------------------------------------------------------
 
-def _register_user(tg_id: int, name: str | None) -> bool:
-    """Insert user as un-onboarded. Returns True iff a new row was created."""
+def _register_user(tg_id: int, name: str | None) -> tuple[bool, str]:
+    """Insert user. Returns (fresh, access_status).
+
+    Supervisor is auto-approved. Everyone else starts pending (unless
+    REQUIRE_APPROVAL=0, in which case they're auto-approved).
+    """
     s = settings()
+    is_supervisor = (tg_id == s.supervisor_chat_id)
+    access_status = "approved" if (is_supervisor or not s.require_approval) else "pending"
+
     with transaction() as cx:
         cur = cx.execute(
-            "INSERT OR IGNORE INTO users (tg_id, name, tz, onboarded) "
-            "VALUES (?, ?, ?, 0)",
-            (tg_id, name or "", s.default_tz),
+            "INSERT OR IGNORE INTO users (tg_id, name, tz, onboarded, access_status) "
+            "VALUES (?, ?, ?, 0, ?)",
+            (tg_id, name or "", s.default_tz, access_status),
         )
-        return cur.rowcount > 0
+        fresh = cur.rowcount > 0
+
+    row = conn().execute(
+        "SELECT access_status FROM users WHERE tg_id = ?", (tg_id,)
+    ).fetchone()
+    return fresh, row["access_status"]
+
+
+def get_access_status(user_id: int) -> str | None:
+    row = conn().execute(
+        "SELECT access_status FROM users WHERE tg_id = ?", (user_id,)
+    ).fetchone()
+    return row["access_status"] if row else None
+
+
+async def _notify_admin_pending(context: ContextTypes.DEFAULT_TYPE, user) -> None:
+    """DM supervisor with approve/reject buttons for a new pending user."""
+    s = settings()
+    name = user.full_name or "?"
+    username = f"@{user.username}" if user.username else "(no username)"
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Duyệt", callback_data=f"usr_app:{user.id}"),
+        InlineKeyboardButton("❌ Từ chối", callback_data=f"usr_rej:{user.id}"),
+    ]])
+    try:
+        await context.bot.send_message(
+            chat_id=s.supervisor_chat_id,
+            text=(
+                f"🆕 *Yêu cầu truy cập mới*\n\n"
+                f"👤 {name}\n"
+                f"🆔 `{user.id}`\n"
+                f"📱 {username}\n\n"
+                f"Hoặc dùng `/approve {user.id}` / `/reject {user.id}`."
+            ),
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
+    except Exception:
+        log.exception("Failed to notify supervisor about pending user %s", user.id)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user is None:
         return
-    fresh = _register_user(user.id, user.full_name)
+    fresh, access = _register_user(user.id, user.full_name)
 
-    if fresh:
+    # Path 1: New user, pending approval
+    if fresh and access == "pending":
+        await update.message.reply_text(
+            f"👋 Xin chào {user.first_name}, mình là *Soul Coach*.\n\n"
+            "🔒 Yêu cầu của bạn đã được gửi đến admin để duyệt.\n"
+            "Bạn sẽ nhận được tin nhắn ngay khi được chấp nhận. Cảm ơn bạn đã kiên nhẫn!",
+            parse_mode="Markdown",
+        )
+        await _notify_admin_pending(context, user)
+        log.info("New pending user registered: %s (%s)", user.id, user.full_name)
+        return
+
+    # Path 2: New user, auto-approved (supervisor or REQUIRE_APPROVAL=0)
+    if fresh and access == "approved":
         await update.message.reply_text(
             f"👋 Xin chào {user.first_name}, mình là *Soul Coach* của bạn.\n\n"
             "Mình giúp bạn duy trì những thói quen tốt và lắng nghe khi cần.",
             parse_mode="Markdown",
         )
         await _send_tz_prompt(update)
+        return
+
+    # Path 3: Existing user
+    if access == "pending":
+        await update.message.reply_text(
+            "⏳ Yêu cầu truy cập của bạn vẫn đang chờ admin duyệt. "
+            "Mình sẽ nhắn lại ngay khi được chấp nhận. 🙏"
+        )
+        return
+    if access == "rejected":
+        await update.message.reply_text(
+            "🚫 Rất tiếc, yêu cầu truy cập của bạn chưa được chấp nhận."
+        )
+        return
+    # access == "approved"
+    if is_awaiting_tz(user.id):
+        await _send_tz_prompt(update)
     else:
-        # Existing user. If somehow they restarted onboarding (rare),
-        # honor that — but most of the time onboarded=1 and we just greet.
-        if is_awaiting_tz(user.id):
-            await _send_tz_prompt(update)
-        else:
-            await update.message.reply_text(
-                f"👋 Chào mừng trở lại, {user.first_name}! Nhắn /help để xem mình có thể làm gì."
-            )
+        await update.message.reply_text(
+            f"👋 Chào mừng trở lại, {user.first_name}! Nhắn /help để xem mình có thể làm gì."
+        )
 
 
 async def _send_tz_prompt(update: Update) -> None:
@@ -217,7 +287,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     sup_cmds = (
         "\n\n👤 *Lệnh supervisor*\n"
-        "/users — danh sách người dùng\n"
+        "/pending — user đang chờ duyệt\n"
+        "/approve <user\\_id> — chấp nhận user\n"
+        "/reject <user\\_id> — từ chối user\n"
+        "/users — danh sách user (có badge trạng thái)\n"
         "/report — gửi báo cáo tuần ngay\n"
         "/resolve <user\\_id> — đóng escalation\n"
         "/transcript <user\\_id> \\[YYYY-WW] — xem lịch sử hội thoại\n"

@@ -4,12 +4,13 @@ PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS users (
-    tg_id      INTEGER PRIMARY KEY,
-    name       TEXT,
-    tz         TEXT NOT NULL DEFAULT 'Asia/Ho_Chi_Minh',
-    joined_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    status     TEXT NOT NULL DEFAULT 'active',  -- active|paused|blocked
-    onboarded  INTEGER NOT NULL DEFAULT 0       -- 0 = awaiting tz setup; 1 = done
+    tg_id          INTEGER PRIMARY KEY,
+    name           TEXT,
+    tz             TEXT NOT NULL DEFAULT 'Asia/Ho_Chi_Minh',
+    joined_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    status         TEXT NOT NULL DEFAULT 'active',     -- active|paused|blocked
+    onboarded      INTEGER NOT NULL DEFAULT 0,         -- 0=awaiting tz; 1=done
+    access_status  TEXT NOT NULL DEFAULT 'pending'     -- pending|approved|rejected
 );
 
 CREATE TABLE IF NOT EXISTS tasks (

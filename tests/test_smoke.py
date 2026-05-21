@@ -160,6 +160,26 @@ def main() -> int:
     assert resolve_tz("nonsense") is None
     print("    OK")
 
+    # 11.5 Access approval queue
+    print("[*] access approval queue…")
+    from handlers import access
+    # Insert a pending user
+    with db.transaction() as cx:
+        cx.execute(
+            "INSERT OR REPLACE INTO users (tg_id, name, access_status, onboarded) "
+            "VALUES (?, ?, 'pending', 0)",
+            (99001, "Pending Tester"),
+        )
+    pending = access.list_pending()
+    assert any(p["tg_id"] == 99001 for p in pending), "user not in pending list"
+    assert access.approve_user(99001), "approve should succeed"
+    pending2 = access.list_pending()
+    assert not any(p["tg_id"] == 99001 for p in pending2), "user still in pending after approve"
+    # rejecting an already-approved user should still flip them to rejected
+    assert access.reject_user(99001)
+    db.conn().execute("DELETE FROM users WHERE tg_id = ?", (99001,))
+    print("    OK")
+
     # 12. KB pending review queue
     print("[*] KB pending queue…")
     pid = kb.add("test", "Test pending question?", "Test answer.", "test", status="pending")

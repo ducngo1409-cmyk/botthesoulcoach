@@ -153,6 +153,8 @@ class TestTimezonePrompt(unittest.IsolatedAsyncioTestCase):
     async def test_new_user_sets_awaiting_tz_flag(self):
         from handlers import onboarding
 
+        # v2.8: new user lands in 'pending' state — gets ONE message about waiting
+        # for admin approval, no tz prompt yet. Onboarding starts after approval.
         user_id = 8001
         update = _mock_update(user_id=user_id)
         update.effective_user.full_name = "TZ Newbie"
@@ -160,9 +162,38 @@ class TestTimezonePrompt(unittest.IsolatedAsyncioTestCase):
         ctx = _mock_context()
 
         await onboarding.start(update, ctx)
+        self.assertEqual(onboarding.get_access_status(user_id), "pending")
+        # One user-facing message (pending); supervisor DM is via ctx.bot.send_message
+        self.assertEqual(update.message.reply_text.call_count, 1)
+        msg_text = update.message.reply_text.call_args[0][0]
+        self.assertIn("duyệt", msg_text.lower())  # "...gửi đến admin để duyệt"
+
+    async def test_approved_new_user_gets_tz_prompt(self):
+        """v2.8: after admin approves, user's next /start triggers tz onboarding."""
+        from handlers import onboarding, access
+
+        user_id = 8011
+        update = _mock_update(user_id=user_id)
+        update.effective_user.full_name = "Approved Soon"
+        update.effective_user.first_name = "Approved"
+        ctx = _mock_context()
+
+        # First /start: pending
+        await onboarding.start(update, ctx)
+        self.assertEqual(onboarding.get_access_status(user_id), "pending")
+
+        # Admin approves
+        self.assertTrue(access.approve_user(user_id))
+        self.assertEqual(onboarding.get_access_status(user_id), "approved")
+
+        # Second /start: gets tz prompt
+        update2 = _mock_update(user_id=user_id)
+        update2.effective_user.full_name = "Approved Soon"
+        update2.effective_user.first_name = "Approved"
+        await onboarding.start(update2, ctx)
         self.assertTrue(onboarding.is_awaiting_tz(user_id))
-        # Two messages sent: welcome + tz prompt
-        self.assertEqual(update.message.reply_text.call_count, 2)
+        # 1 tz prompt message
+        update2.message.reply_text.assert_called()
 
     async def test_returning_user_no_tz_prompt(self):
         from handlers import onboarding
