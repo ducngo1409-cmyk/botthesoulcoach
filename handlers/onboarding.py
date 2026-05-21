@@ -81,29 +81,31 @@ def get_access_status(user_id: int) -> str | None:
 
 
 async def _notify_admin_pending(context: ContextTypes.DEFAULT_TYPE, user) -> None:
-    """DM supervisor with approve/reject buttons for a new pending user."""
-    s = settings()
+    """DM every admin with approve/reject buttons for a new pending user."""
+    from services import roles
     name = user.full_name or "?"
     username = f"@{user.username}" if user.username else "(no username)"
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Duyệt", callback_data=f"usr_app:{user.id}"),
         InlineKeyboardButton("❌ Từ chối", callback_data=f"usr_rej:{user.id}"),
     ]])
-    try:
-        await context.bot.send_message(
-            chat_id=s.supervisor_chat_id,
-            text=(
-                f"🆕 *Yêu cầu truy cập mới*\n\n"
-                f"👤 {name}\n"
-                f"🆔 `{user.id}`\n"
-                f"📱 {username}\n\n"
-                f"Hoặc dùng `/approve {user.id}` / `/reject {user.id}`."
-            ),
-            parse_mode="Markdown",
-            reply_markup=keyboard,
-        )
-    except Exception:
-        log.exception("Failed to notify supervisor about pending user %s", user.id)
+    text = (
+        f"🆕 *Yêu cầu truy cập mới*\n\n"
+        f"👤 {name}\n"
+        f"🆔 `{user.id}`\n"
+        f"📱 {username}\n\n"
+        f"Hoặc dùng `/approve {user.id}` / `/reject {user.id}`."
+    )
+    for admin_id in roles.get_ids_with_perm("manage_users"):
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=keyboard,
+            )
+        except Exception:
+            log.warning("Failed to notify admin %s about pending user %s", admin_id, user.id)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -264,14 +266,17 @@ async def tz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # --- /help ---------------------------------------------------------------
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    is_supervisor = (
-        update.effective_user is not None
-        and update.effective_user.id == settings().supervisor_chat_id
-    )
+    from services import roles
+    user = update.effective_user
+    role = roles.get_role(user.id) if user else "user"
 
-    user_cmds = (
-        "📋 *Lệnh người dùng*\n"
+    parts = []
+
+    # Always show user-level commands
+    parts.append(
+        "📋 *Lệnh cho mọi người*\n"
         "/start — đăng ký\n"
+        "/myrole — xem role của bạn\n"
         "/tz \\[thành phố] — xem/đổi múi giờ (vd `/tz Tokyo`)\n"
         "/tasks — xem nhắc nhở\n"
         "/addtask <tên> | <giờ> — thêm nhắc nhở\n"
@@ -285,34 +290,67 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/talk\\_to\\_human — kết nối với coach con người\n\n"
         "_Hoặc cứ nhắn bất cứ điều gì, mình sẽ cố giúp._"
     )
-    sup_cmds = (
-        "\n\n👤 *Quản lý user*\n"
-        "/users \\[filter] — list (filter: pending/approved/rejected/active/paused/blocked)\n"
-        "/user <id> — chi tiết user + stats\n"
-        "/user\\_tasks <id> — task của user\n"
-        "/pending — user đang chờ duyệt\n"
-        "/approve <id> — duyệt user\n"
-        "/reject <id> — từ chối user\n"
-        "/revoke <id> — thu hồi quyền (approved → rejected)\n"
-        "/block <id> — block (bot ngưng gửi)\n"
-        "/unblock <id> — gỡ block\n"
-        "/freeze <id> — dừng tất cả reminder cho user\n"
-        "/unfreeze <id> — resume\n"
-        "/dm <id> <msg> — gửi DM cho user\n"
-        "/broadcast <msg> — gửi cho tất cả approved+active\n"
-        "/reonboard <id> — buộc user set tz lại\n"
-        "/delete\\_user <id> confirm — xóa hẳn user + data\n"
-        "\n📋 *Khác*\n"
-        "/report — gửi báo cáo tuần ngay\n"
-        "/resolve <id> — đóng escalation\n"
-        "/transcript <id> \\[YYYY-WW] — xem lịch sử hội thoại\n"
-        "/settask <id> | <tên> | <giờ> — giao nhắc nhở cho user\n"
-        "/debug — snapshot bot, escalations, lỗi gần nhất\n"
-        "\n📚 *KB*\n"
-        "/kb\\_add <cat> | <q> | <a> | <kw>\n"
-        "/kb\\_list \\[cat]    /kb\\_edit <id> <field>=<value>    /kb\\_del <id>\n"
-        "/kb\\_pending    /kb\\_approve <id> \\[cat] \\[kw]    /kb\\_reject <id>\n"
-        "/kb\\_promote <interaction\\_id>"
-    )
-    text = user_cmds + (sup_cmds if is_supervisor else "")
-    await update.message.reply_text(text, parse_mode="Markdown")
+
+    # Coacher-level commands (admin + coacher)
+    if roles.has_perm(user.id, "view_users") if user else False:
+        parts.append(
+            "\n\n🎓 *Lệnh Coacher* (admin + coacher + service xem)\n"
+            "/users \\[filter] — list user (filter: pending/approved/rejected/active/paused/blocked)\n"
+            "/user <id> — profile + stats\n"
+            "/user\\_tasks <id> — task của user\n"
+            "/pending — user đang chờ duyệt\n"
+            "/roles — danh sách staff"
+        )
+    if roles.has_perm(user.id, "handle_escalation") if user else False:
+        parts.append(
+            "\n\n💬 *Hỗ trợ user* (admin + coacher)\n"
+            "/transcript <id> \\[YYYY-WW] — xem lịch sử hội thoại\n"
+            "/resolve <id> — đóng escalation\n"
+            "/dm <id> <msg> — gửi DM cho user\n"
+            "/settask <id> | <tên> | <giờ> — giao nhắc nhở"
+        )
+    if roles.has_perm(user.id, "manage_kb") if user else False:
+        parts.append(
+            "\n\n📚 *Quản lý KB* (admin + coacher)\n"
+            "/kb\\_add <cat> | <q> | <a> | <kw>\n"
+            "/kb\\_list \\[cat]   /kb\\_edit <id> <field>=<value>   /kb\\_del <id>\n"
+            "/kb\\_pending   /kb\\_approve <id> \\[cat] \\[kw]   /kb\\_reject <id>\n"
+            "/kb\\_promote <interaction\\_id>"
+        )
+    if roles.has_perm(user.id, "view_reports") if user else False:
+        parts.append(
+            "\n\n📊 *Báo cáo*\n"
+            "/report — gửi báo cáo tuần ngay"
+        )
+    if roles.has_perm(user.id, "view_debug") if user else False:
+        parts.append(
+            "\n\n🔧 *System* (admin + service)\n"
+            "/debug — snapshot bot, escalations, lỗi gần nhất"
+        )
+
+    # Admin-only
+    if roles.has_perm(user.id, "manage_users") if user else False:
+        parts.append(
+            "\n\n👑 *Quản lý user* (admin only)\n"
+            "/approve <id> — duyệt user\n"
+            "/reject <id> — từ chối user\n"
+            "/revoke <id> — thu hồi quyền\n"
+            "/block <id> /unblock <id> — block/gỡ block\n"
+            "/freeze <id> /unfreeze <id> — pause/resume reminder\n"
+            "/reonboard <id> — buộc set tz lại\n"
+            "/delete\\_user <id> confirm — xóa hẳn"
+        )
+    if roles.has_perm(user.id, "manage_roles") if user else False:
+        parts.append(
+            "\n\n🛡 *Quản lý role* (admin only)\n"
+            "/promote <id> <role> — gán role (admin/coacher/service/user)\n"
+            "/demote <id> — về user"
+        )
+    if roles.has_perm(user.id, "broadcast") if user else False:
+        parts.append(
+            "\n\n📢 *Broadcast* (admin only)\n"
+            "/broadcast <msg> — gửi cho tất cả approved+active"
+        )
+
+    parts.append(f"\n\n_Role hiện tại: {roles.ROLE_EMOJI.get(role, '?')} `{role}`_")
+    await update.message.reply_text("".join(parts), parse_mode="Markdown")

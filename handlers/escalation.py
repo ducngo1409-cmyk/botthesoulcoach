@@ -107,20 +107,22 @@ async def escalate(
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Mark resolved", callback_data=f"resolve:{user_id}"),
     ]])
-    try:
-        await context.bot.send_message(
-            chat_id=s.supervisor_chat_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
-        log.info("Escalation for user %s (%s) sent to supervisor", user_id, reason)
-    except Exception:
-        log.exception(
-            "Failed to send escalation to supervisor (chat_id=%s). "
-            "Make sure the supervisor has sent /start to the bot at least once.",
-            s.supervisor_chat_id,
-        )
+    # Fan out to all handlers (admins + coachers)
+    from services import roles
+    recipients = roles.get_ids_with_perm("handle_escalation")
+    sent_to = 0
+    for rid in recipients:
+        try:
+            await context.bot.send_message(
+                chat_id=rid,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+            sent_to += 1
+        except Exception:
+            log.warning("Failed to notify %s about escalation for user %s", rid, user_id)
+    log.info("Escalation for user %s (%s) sent to %d handler(s)", user_id, reason, sent_to)
 
     # Tell user
     try:

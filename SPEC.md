@@ -1,8 +1,9 @@
-# Soul Coach Telegram Bot — Specification (v2.9)
+# Soul Coach Telegram Bot — Specification (v2.10)
 
 > Source of truth for implementation. Updated as features land.
 >
-> **v2.9** (current): Full user-management suite for supervisor — `/users [filter]`, `/user <id>`, `/user_tasks`, `/revoke`, `/block`/`/unblock`, `/freeze`/`/unfreeze`, `/dm`, `/broadcast`, `/reonboard`, `/delete_user`.
+> **v2.10** (current): RBAC roles (admin/coacher/service/user) with explicit permission matrix. Bootstrap admin auto-promoted from `SUPERVISOR_CHAT_ID`. Internal notifications fan out to all role-holders. `/promote /demote /roles /myrole` commands. Role-aware `/help`.
+> v2.9: Full user-management suite for supervisor — `/users [filter]`, `/user <id>`, `/user_tasks`, `/revoke`, `/block`/`/unblock`, `/freeze`/`/unfreeze`, `/dm`, `/broadcast`, `/reonboard`, `/delete_user`.
 > v2.8: Request-to-join approval model — anyone can /start, admin gets DM with Approve/Reject buttons, user locked until approved. Replaces env-based ALLOWED_USER_IDS allowlist.
 > v2.7.2: DB-backed onboarding state survives restarts; strict state-machine isolation in access.gate.
 > v2.7.1: Mandatory onboarding enforcement, fix "không" skip-keyword regression, USER_GUIDE + ADMIN_GUIDE.
@@ -85,6 +86,19 @@ ESCALATED ── /resolve OR auto-clear after 24h ──▶ IDLE (counter=0)
 ```
 
 ## 6. Functional Modules
+
+### 5.5 RBAC Roles (v2.10)
+
+4 roles with explicit permission set per role (no implicit hierarchy). Pattern follows Discord moderation bots (MEE6/Carl-bot) and Telegram community bots (Combot).
+
+```
+users.role ∈ { admin, coacher, service, user }
+```
+
+- `SUPERVISOR_CHAT_ID` is always coerced to `admin` at boot (idempotent).
+- Service module: `services/roles.py` with `PERMISSIONS` matrix, `get_role()`, `has_perm()`, `set_role()`, `get_ids_with_perm()` for notification fan-out.
+- Each admin command checks `_can(update, "<perm>")` instead of supervisor-id equality.
+- Internal notifications (pending user → admins; escalation/KB-pending → admins+coachers) now fan out via `roles.get_ids_with_perm()` so multiple staff can be added without code changes.
 
 ### 6.0 Access Gate (v2.8)
 `handlers/access.gate` is a `TypeHandler` installed at `group=-1` (runs before any feature handler). Raises `ApplicationHandlerStop` to drop unauthorized updates entirely.
@@ -225,6 +239,10 @@ Failure returns a friendly help text with worked examples — used as the `/addt
 | `/broadcast <msg>` | S | DM all approved+active users (skipping S) |
 | `/reonboard <user_id>` | S | Force the user to re-do tz onboarding |
 | `/delete_user <user_id> confirm` | S | Hard delete user + all related rows (CASCADE) |
+| `/promote <user_id> <role>` | admin | Set role (admin/coacher/service/user); auto-approves |
+| `/demote <user_id>` | admin | Set role back to `user` |
+| `/roles` | staff | List all admins/coachers/services |
+| `/myrole` | any | Show caller's own role |
 | `/settask <user_id> \| <title> \| <cron>` | S | Assign reminder to a user |
 | `/kb_add <cat> \| <q> \| <a> \| <kw>` | S | Add active KB entry |
 | `/kb_list [cat]` | S | Browse |

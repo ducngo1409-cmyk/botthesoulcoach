@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS users (
     joined_at      TEXT NOT NULL DEFAULT (datetime('now')),
     status         TEXT NOT NULL DEFAULT 'active',     -- active|paused|blocked
     onboarded      INTEGER NOT NULL DEFAULT 0,         -- 0=awaiting tz; 1=done
-    access_status  TEXT NOT NULL DEFAULT 'pending'     -- pending|approved|rejected
+    access_status  TEXT NOT NULL DEFAULT 'pending',    -- pending|approved|rejected
+    role           TEXT NOT NULL DEFAULT 'user'        -- admin|coacher|service|user
 );
 
 CREATE TABLE IF NOT EXISTS tasks (

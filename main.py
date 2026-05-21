@@ -93,6 +93,12 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("reonboard", admin.reonboard_cmd))
     app.add_handler(CommandHandler("delete_user", admin.delete_user_cmd))
 
+    # Role management (v2.10)
+    app.add_handler(CommandHandler("promote", admin.promote_cmd))
+    app.add_handler(CommandHandler("demote", admin.demote_cmd))
+    app.add_handler(CommandHandler("roles", admin.roles_cmd))
+    app.add_handler(CommandHandler("myrole", admin.myrole_cmd))
+
     # --- Callback queries ---
     app.add_handler(CallbackQueryHandler(reminders.mood_callback, pattern=r"^mood:"))
     app.add_handler(CallbackQueryHandler(qa.feedback_callback, pattern=r"^sat:"))

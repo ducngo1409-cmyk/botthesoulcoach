@@ -1,4 +1,9 @@
-"""Supervisor-only admin commands."""
+"""Admin / coacher / service commands — gated by role-based permissions.
+
+See services/roles.py for the permission matrix. Each command picks the
+appropriate permission via `_can(update, "<perm>")`. Replace this with
+`require_perm()` once all callers are migrated.
+"""
 
 from __future__ import annotations
 
@@ -12,22 +17,19 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from config import settings
 from db import conn, transaction
 from handlers import access
-from services import kb
+from services import kb, roles
 
 log = logging.getLogger(__name__)
 
 
-def _is_supervisor(update: Update) -> bool:
-    s = settings()
-    return (
-        update.effective_user is not None
-        and update.effective_user.id == s.supervisor_chat_id
-    )
+def _can(update: Update, perm: str) -> bool:
+    """Return True iff the caller's role has the given permission."""
+    return roles.require_perm(update, perm)
 
 
 async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/debug — supervisor-only live status snapshot."""
-    if not _is_supervisor(update):
+    """/debug — live status snapshot (admin + service)."""
+    if not _can(update, "view_debug"):
         return
 
     users = conn().execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
@@ -75,7 +77,7 @@ async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def report_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_supervisor(update):
+    if not _can(update, "view_reports"):
         return
     from services.reports import send_weekly_report
     await update.message.reply_text("Generating report…")
@@ -83,8 +85,8 @@ async def report_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def pending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/pending — list users awaiting access approval."""
-    if not _is_supervisor(update):
+    """/pending — list users awaiting access approval. Visible to staff."""
+    if not _can(update, "view_users"):
         return
     pending = access.list_pending()
     if not pending:
@@ -104,7 +106,7 @@ async def pending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/approve <user_id> — approve a pending user."""
-    if not _is_supervisor(update):
+    if not _can(update, "manage_users"):
         return
     if not context.args:
         await update.message.reply_text(
@@ -139,7 +141,7 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def reject_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/reject <user_id> — reject a pending user."""
-    if not _is_supervisor(update):
+    if not _can(update, "manage_users"):
         return
     if not context.args:
         await update.message.reply_text(
@@ -161,7 +163,7 @@ async def reject_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def user_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Inline button on the pending-user DM: ✅ Duyệt / ❌ Từ chối."""
-    if not _is_supervisor(update):
+    if not _can(update, "manage_users"):
         return
     query = update.callback_query
     await query.answer()
@@ -201,7 +203,7 @@ async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     Filters: pending | approved | rejected | active | paused | blocked
     """
-    if not _is_supervisor(update):
+    if not _can(update, "view_users"):
         return
 
     valid_access = {"pending", "approved", "rejected"}
@@ -257,8 +259,8 @@ async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/user <id> — detailed profile + stats for a single user."""
-    if not _is_supervisor(update):
+    """/user <id> — detailed profile + stats. Visible to staff."""
+    if not _can(update, "view_users"):
         return
     if not context.args:
         await update.message.reply_text(
@@ -337,8 +339,8 @@ async def user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def user_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/user_tasks <id> — list all reminders for a user."""
-    if not _is_supervisor(update):
+    """/user_tasks <id> — list reminders. Visible to staff."""
+    if not _can(update, "view_users"):
         return
     if not context.args:
         await update.message.reply_text(
@@ -374,7 +376,7 @@ async def user_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def revoke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/revoke <user_id> — take back an approved user's access."""
-    if not _is_supervisor(update):
+    if not _can(update, "manage_users"):
         return
     if not context.args:
         await update.message.reply_text(
@@ -413,7 +415,7 @@ async def revoke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def block_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/block <user_id> — mark user as blocked (bot stops sending to them)."""
-    if not _is_supervisor(update):
+    if not _can(update, "manage_users"):
         return
     if not context.args:
         await update.message.reply_text("Usage: `/block <user_id>`", parse_mode="Markdown")
@@ -437,7 +439,7 @@ async def block_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def unblock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/unblock <user_id> — restore status to 'active'."""
-    if not _is_supervisor(update):
+    if not _can(update, "manage_users"):
         return
     if not context.args:
         await update.message.reply_text("Usage: `/unblock <user_id>`", parse_mode="Markdown")
@@ -463,7 +465,7 @@ async def unblock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def freeze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/freeze <user_id> — pause all reminders for a user (status='paused')."""
-    if not _is_supervisor(update):
+    if not _can(update, "manage_users"):
         return
     if not context.args:
         await update.message.reply_text("Usage: `/freeze <user_id>`", parse_mode="Markdown")
@@ -499,7 +501,7 @@ async def freeze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def unfreeze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/unfreeze <user_id> — resume reminders."""
-    if not _is_supervisor(update):
+    if not _can(update, "manage_users"):
         return
     if not context.args:
         await update.message.reply_text("Usage: `/unfreeze <user_id>`", parse_mode="Markdown")
@@ -540,8 +542,8 @@ async def unfreeze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # --- Communication -------------------------------------------------------
 
 async def dm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/dm <user_id> <message> — admin DMs a user directly through the bot."""
-    if not _is_supervisor(update):
+    """/dm <user_id> <message> — admin/coacher DMs a user via the bot."""
+    if not _can(update, "dm_user"):
         return
     if len(context.args) < 2:
         await update.message.reply_text(
@@ -573,8 +575,8 @@ async def dm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/broadcast <message> — send a message to all approved+active users."""
-    if not _is_supervisor(update):
+    """/broadcast <message> — admin-only fan-out to all approved+active users."""
+    if not _can(update, "broadcast"):
         return
     if not context.args:
         await update.message.reply_text(
@@ -620,7 +622,7 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def reonboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/reonboard <user_id> — clear onboarded flag, force tz re-prompt."""
-    if not _is_supervisor(update):
+    if not _can(update, "manage_users"):
         return
     if not context.args:
         await update.message.reply_text("Usage: `/reonboard <user_id>`", parse_mode="Markdown")
@@ -651,7 +653,7 @@ async def reonboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def delete_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/delete_user <user_id> [confirm] — hard delete user + all related rows."""
-    if not _is_supervisor(update):
+    if not _can(update, "manage_users"):
         return
     if not context.args:
         await update.message.reply_text(
@@ -712,8 +714,8 @@ async def delete_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def transcript_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/transcript <user_id> [YYYY-WW]"""
-    if not _is_supervisor(update):
+    """/transcript <user_id> [YYYY-WW] — admin + coacher."""
+    if not _can(update, "view_transcripts"):
         return
     if not context.args:
         await update.message.reply_text("Usage: `/transcript <user_id> [YYYY-WW]`",
@@ -777,7 +779,7 @@ async def transcript_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def kb_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/kb_add <category> | <question> | <answer> | <keywords>"""
-    if not _is_supervisor(update):
+    if not _can(update, "manage_kb"):
         return
     raw = " ".join(context.args)
     parts = [p.strip() for p in raw.split("|")]
@@ -798,7 +800,7 @@ async def kb_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def kb_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_supervisor(update):
+    if not _can(update, "manage_kb"):
         return
     cat = context.args[0] if context.args else None
     entries = kb.list_all(cat)
@@ -822,7 +824,7 @@ async def kb_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def kb_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/kb_edit <id> <field>=<value>  (field: category|question|answer|keywords)"""
-    if not _is_supervisor(update):
+    if not _can(update, "manage_kb"):
         return
     if len(context.args) < 2:
         await update.message.reply_text(
@@ -849,7 +851,7 @@ async def kb_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def kb_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_supervisor(update):
+    if not _can(update, "manage_kb"):
         return
     if not context.args:
         await update.message.reply_text("Usage: `/kb_del <id>`", parse_mode="Markdown")
@@ -864,11 +866,11 @@ async def kb_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def settask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/settask <user_id> | <title> | <giờ> — supervisor assigns task to a user.
+    """/settask <user_id> | <title> | <giờ> — admin + coacher.
 
     Accepts both friendly time ('daily 22:30') and raw cron ('30 22 * * *').
     """
-    if not _is_supervisor(update):
+    if not _can(update, "assign_task"):
         return
     raw = " ".join(context.args)
     parts = [p.strip() for p in raw.split("|")]
@@ -933,8 +935,8 @@ async def settask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def kb_pending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List all pending KB entries awaiting supervisor approval."""
-    if not _is_supervisor(update):
+    """List all pending KB entries awaiting review."""
+    if not _can(update, "review_kb_pending"):
         return
     pending = kb.list_pending()
     if not pending:
@@ -955,7 +957,7 @@ async def kb_pending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def kb_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/kb_approve <id> [category] [keywords] — promote a pending entry."""
-    if not _is_supervisor(update):
+    if not _can(update, "review_kb_pending"):
         return
     if not context.args:
         await update.message.reply_text(
@@ -977,7 +979,7 @@ async def kb_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def kb_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/kb_reject <id> — delete a pending entry."""
-    if not _is_supervisor(update):
+    if not _can(update, "review_kb_pending"):
         return
     if not context.args:
         await update.message.reply_text(
@@ -997,7 +999,7 @@ async def kb_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def kb_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Inline button on pending-KB notification: ✅ Approve / ❌ Reject."""
-    if not _is_supervisor(update):
+    if not _can(update, "review_kb_pending"):
         return
     query = update.callback_query
     await query.answer()
@@ -1026,7 +1028,7 @@ async def kb_promote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     before the LLM reply) becomes the question; the bot reply becomes the answer.
     Supervisor is then nudged to set category/keywords via /kb_edit.
     """
-    if not _is_supervisor(update):
+    if not _can(update, "review_kb_pending"):
         return
     if not context.args:
         await update.message.reply_text(
@@ -1069,4 +1071,132 @@ async def kb_promote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"Refine with `/kb_edit {new_id} category=<cat>` "
         f"and `/kb_edit {new_id} keywords=<kw1, kw2>`",
         parse_mode="Markdown",
+    )
+
+
+# --- Role management (v2.10) --------------------------------------------
+
+async def promote_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/promote <user_id> <role> — assign a role. Admin only.
+
+    Valid roles: admin, coacher, service, user (treat 'user' same as /demote).
+    Auto-approves the target so they can use the bot immediately.
+    """
+    if not _can(update, "manage_roles"):
+        return
+    if len(context.args) < 2:
+        roles_list = ", ".join(roles.ROLES)
+        await update.message.reply_text(
+            f"Usage: `/promote <user_id> <role>`\nRoles: {roles_list}",
+            parse_mode="Markdown",
+        )
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+    new_role = context.args[1].lower().strip()
+    if new_role not in roles.ROLES:
+        roles_list = ", ".join(roles.ROLES)
+        await update.message.reply_text(
+            f"Role không hợp lệ. Chọn: {roles_list}", parse_mode="Markdown"
+        )
+        return
+
+    if not roles.set_role(uid, new_role):
+        await update.message.reply_text(
+            f"Không thể thay đổi role cho user `{uid}` "
+            f"(không tồn tại hoặc là supervisor).",
+            parse_mode="Markdown",
+        )
+        return
+
+    # Staff get auto-approved
+    if new_role != "user":
+        with transaction() as cx:
+            cx.execute(
+                "UPDATE users SET access_status = 'approved' WHERE tg_id = ?",
+                (uid,),
+            )
+
+    emoji = roles.ROLE_EMOJI.get(new_role, "?")
+    label = roles.ROLE_LABEL_VI.get(new_role, new_role)
+    await update.message.reply_text(
+        f"{emoji} Đã đặt role *{label}* cho user `{uid}`.", parse_mode="Markdown"
+    )
+    log.info("Admin %s promoted user %s to %s", update.effective_user.id, uid, new_role)
+
+    if new_role != "user":
+        try:
+            await context.bot.send_message(
+                chat_id=uid,
+                text=(
+                    f"{emoji} Bạn vừa được nâng cấp lên *{label}*.\n\n"
+                    "Gõ /help để xem các lệnh mới bạn có quyền dùng."
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception:
+            log.warning("Could not notify promoted user %s", uid)
+
+
+async def demote_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/demote <user_id> — set role back to 'user'. Admin only."""
+    if not _can(update, "manage_roles"):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/demote <user_id>`", parse_mode="Markdown"
+        )
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+
+    if not roles.set_role(uid, "user"):
+        await update.message.reply_text(
+            f"Không thể demote user `{uid}` (không tồn tại hoặc là supervisor).",
+            parse_mode="Markdown",
+        )
+        return
+    await update.message.reply_text(
+        f"👤 Đã đưa user `{uid}` về role *user*.", parse_mode="Markdown"
+    )
+    log.info("Admin %s demoted user %s to 'user'", update.effective_user.id, uid)
+
+
+async def roles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/roles — list all staff grouped by role. Visible to any staff member."""
+    if not _can(update, "view_users"):
+        return
+    grouped = roles.list_staff()
+    if not any(grouped.values()):
+        await update.message.reply_text("Chưa có staff nào (ngoài supervisor bootstrap).")
+        return
+    lines = ["🛡 *Đội ngũ Soul Coach*\n"]
+    for role_name in ("admin", "coacher", "service"):
+        members = grouped.get(role_name, [])
+        if not members:
+            continue
+        emoji = roles.ROLE_EMOJI[role_name]
+        label = roles.ROLE_LABEL_VI[role_name]
+        lines.append(f"\n{emoji} *{label}* ({len(members)})")
+        for m in members:
+            lines.append(f"  • `{m['tg_id']}` — {m['name'] or '?'}")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def myrole_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/myrole — show the caller's own role. Available to all users."""
+    user = update.effective_user
+    if user is None:
+        return
+    role = roles.get_role(user.id)
+    emoji = roles.ROLE_EMOJI.get(role, "?")
+    label = roles.ROLE_LABEL_VI.get(role, role)
+    await update.message.reply_text(
+        f"{emoji} Role của bạn: *{label}* (`{role}`)", parse_mode="Markdown"
     )

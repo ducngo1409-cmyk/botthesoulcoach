@@ -1,8 +1,62 @@
-# Soul Coach — Admin / Supervisor Guide
+# Soul Coach — Admin / Staff Guide
 
-> Hướng dẫn dành cho **Supervisor (S)** — người vận hành bot, duyệt KB, theo dõi escalation, deploy.
+> Hướng dẫn dành cho staff: **Admin 👑**, **Coacher 🎓**, **Service ⚙️**.
 >
-> Phiên bản: v2.9 (2026-05)
+> Phiên bản: v2.10 (2026-05)
+
+---
+
+## 0. Hệ thống Role (v2.10)
+
+Bot có 4 role, mỗi role có quyền hạn riêng (tham khảo cấu trúc Discord MEE6 / Telegram Combot):
+
+| Role | Emoji | Quyền |
+|---|---|---|
+| **admin** | 👑 | Toàn quyền: user lifecycle, role management, broadcast, delete |
+| **coacher** | 🎓 | Xử lý user: escalation, KB, transcript, settask, dm |
+| **service** | ⚙️ | Read-only: debug, view users (cho monitoring/automation) |
+| **user** | 👤 | Người dùng cuối, chỉ quản lý tài nguyên của mình |
+
+`SUPERVISOR_CHAT_ID` được auto-set role `admin` lúc boot (bootstrap admin, không thể demote).
+
+### Lệnh role management (admin only)
+
+| Lệnh | Việc làm |
+|---|---|
+| `/promote <user_id> <role>` | Gán role. Auto-approve user nếu trước đó là pending |
+| `/demote <user_id>` | Đưa user về role `user` |
+| `/roles` | Liệt kê tất cả staff theo role |
+| `/myrole` | Ai cũng dùng được — xem role của bản thân |
+
+### Permission matrix
+
+| Permission | admin | coacher | service | user |
+|---|---|---|---|---|
+| view_users | ✅ | ✅ | ✅ | ❌ |
+| manage_users (approve/reject/revoke/block/freeze/delete/reonboard) | ✅ | ❌ | ❌ | ❌ |
+| manage_roles | ✅ | ❌ | ❌ | ❌ |
+| broadcast | ✅ | ❌ | ❌ | ❌ |
+| dm_user | ✅ | ✅ | ❌ | ❌ |
+| view_transcripts | ✅ | ✅ | ❌ | ❌ |
+| handle_escalation | ✅ | ✅ | ❌ | ❌ |
+| assign_task | ✅ | ✅ | ❌ | ❌ |
+| manage_kb | ✅ | ✅ | ❌ | ❌ |
+| review_kb_pending | ✅ | ✅ | ❌ | ❌ |
+| view_debug | ✅ | ❌ | ✅ | ❌ |
+| view_reports | ✅ | ✅ | ❌ | ❌ |
+
+### Notification fan-out
+
+Bot tự gửi nội bộ tới ALL người có quyền tương ứng:
+
+| Sự kiện | Gửi cho |
+|---|---|
+| User mới /start (pending) | Tất cả `admin` |
+| Escalation (kb_miss / counter / manual) | Tất cả `admin` + `coacher` |
+| KB pending review | Tất cả `admin` + `coacher` |
+| Quota error | `admin` (rate-limited) |
+
+Trước đây chỉ DM `SUPERVISOR_CHAT_ID` — giờ scale được khi có nhiều admin/coacher.
 
 ---
 

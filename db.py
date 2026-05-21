@@ -89,6 +89,26 @@ def _migrate() -> None:
         log.info("Migration: added users.access_status (existing users = approved)")
     conn().execute("CREATE INDEX IF NOT EXISTS idx_users_access ON users(access_status)")
 
+    # users.role (v2.10) — RBAC roles: admin|coacher|service|user
+    cur = conn().execute("PRAGMA table_info(users)")
+    ucols = {row[1] for row in cur.fetchall()}
+    if "role" not in ucols:
+        conn().execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+        log.info("Migration: added users.role column (all existing = 'user')")
+    conn().execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
+
+    # Ensure the bootstrap supervisor is registered as admin. Idempotent.
+    s = settings()
+    conn().execute(
+        "INSERT OR IGNORE INTO users (tg_id, name, tz, onboarded, access_status, role) "
+        "VALUES (?, ?, ?, 1, 'approved', 'admin')",
+        (s.supervisor_chat_id, "Supervisor", s.default_tz),
+    )
+    conn().execute(
+        "UPDATE users SET role = 'admin', access_status = 'approved' WHERE tg_id = ?",
+        (s.supervisor_chat_id,),
+    )
+
 
 def _clear_stale_escalations() -> None:
     """On startup: auto-resolve escalations open > 24h — prevents users being stuck forever."""

@@ -306,31 +306,31 @@ async def feedback_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             chat_id=user_id, text="🌟 Vui vì mình giúp được bạn!"
         )
 
-        # Auto-promote LLM reply to KB as PENDING and notify supervisor.
-        # Pending entries are NOT used in search until supervisor approves —
-        # this protects KB quality from drift and duplicates.
+        # Auto-promote LLM reply to KB as PENDING and notify reviewers.
+        # Pending entries are NOT used in search until approved — protects KB
+        # quality from drift and duplicates. Fan-out to admins + coachers.
         if is_llm and row:
             result = _promote_to_kb(row["text"], user_id, interaction_id)
             if result:
                 new_kb_id, question, keywords = result
-                s = settings()
+                from services import roles
                 approve_kb = InlineKeyboardMarkup([[
                     InlineKeyboardButton("✅ Approve", callback_data=f"kb_app:{new_kb_id}"),
                     InlineKeyboardButton("❌ Reject", callback_data=f"kb_rej:{new_kb_id}"),
                 ]])
-                try:
-                    await context.bot.send_message(
-                        chat_id=s.supervisor_chat_id,
-                        text=(
-                            f"📚 KB pending #{new_kb_id} — chờ duyệt\n\n"
-                            f"❓ {question[:200]}\n\n"
-                            f"🤖 {row['text'][:300]}\n\n"
-                            f"🔑 keywords: {keywords or '(none)'}"
-                        ),
-                        reply_markup=approve_kb,
-                    )
-                except Exception:
-                    log.warning("Could not notify supervisor about KB #%s", new_kb_id)
+                text_msg = (
+                    f"📚 KB pending #{new_kb_id} — chờ duyệt\n\n"
+                    f"❓ {question[:200]}\n\n"
+                    f"🤖 {row['text'][:300]}\n\n"
+                    f"🔑 keywords: {keywords or '(none)'}"
+                )
+                for rid in roles.get_ids_with_perm("review_kb_pending"):
+                    try:
+                        await context.bot.send_message(
+                            chat_id=rid, text=text_msg, reply_markup=approve_kb,
+                        )
+                    except Exception:
+                        log.warning("Could not notify %s about KB #%s", rid, new_kb_id)
         return
 
     # 👎

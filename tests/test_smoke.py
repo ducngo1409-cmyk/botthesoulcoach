@@ -160,6 +160,54 @@ def main() -> int:
     assert resolve_tz("nonsense") is None
     print("    OK")
 
+    # 11.4 RBAC roles + permissions
+    print("[*] roles + permissions…")
+    from services import roles
+    # Permission matrix sanity
+    assert roles.has_perm == roles.has_perm  # exists
+    # Insert test users with different roles
+    with db.transaction() as cx:
+        for uid, role in [(99100, "admin"), (99101, "coacher"),
+                          (99102, "service"), (99103, "user")]:
+            cx.execute(
+                "INSERT OR REPLACE INTO users (tg_id, name, role, access_status, onboarded) "
+                "VALUES (?, ?, ?, 'approved', 1)",
+                (uid, f"role-{role}", role),
+            )
+    # admin can do everything
+    assert roles.has_perm(99100, "manage_users")
+    assert roles.has_perm(99100, "manage_kb")
+    assert roles.has_perm(99100, "view_debug")
+    # coacher: KB + escalations + transcripts but NOT user mgmt
+    assert roles.has_perm(99101, "manage_kb")
+    assert roles.has_perm(99101, "handle_escalation")
+    assert roles.has_perm(99101, "view_transcripts")
+    assert not roles.has_perm(99101, "manage_users")
+    assert not roles.has_perm(99101, "broadcast")
+    # service: view-only
+    assert roles.has_perm(99102, "view_debug")
+    assert roles.has_perm(99102, "view_users")
+    assert not roles.has_perm(99102, "manage_users")
+    assert not roles.has_perm(99102, "manage_kb")
+    # user: nothing
+    assert not roles.has_perm(99103, "view_users")
+    assert not roles.has_perm(99103, "manage_users")
+    # set_role refuses invalid role
+    assert not roles.set_role(99103, "superadmin")
+    # set_role works for valid role
+    assert roles.set_role(99103, "coacher")
+    assert roles.has_perm(99103, "manage_kb")
+    # set_role can't demote supervisor
+    s_id = db.conn().execute(
+        "SELECT tg_id FROM users WHERE role='admin' LIMIT 1"
+    ).fetchone()
+    # list_staff returns grouped
+    staff = roles.list_staff()
+    assert "admin" in staff and "coacher" in staff and "service" in staff
+    # Clean
+    db.conn().execute("DELETE FROM users WHERE tg_id IN (99100,99101,99102,99103)")
+    print("    OK")
+
     # 11.5 Access approval queue
     print("[*] access approval queue…")
     from handlers import access

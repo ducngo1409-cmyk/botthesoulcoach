@@ -1,4 +1,4 @@
-# Soul Coach — Telegram Bot (v2.9)
+# Soul Coach — Telegram Bot (v2.10)
 
 A Vietnamese-first mental-coach Telegram bot. Pings users for task check-ins, answers
 from a curated Knowledge Base (KB), uses Gemini Flash as a grounded RAG fallback
@@ -14,6 +14,24 @@ report.
 | Developer | [SPEC.md](SPEC.md) — full design |
 | QA | [TESTPLAN.md](TESTPLAN.md) — test strategy |
 | DevOps | [deploy/GCP_DEPLOY.md](deploy/GCP_DEPLOY.md) — step-by-step deploy |
+
+## What's new in v2.10
+
+**RBAC roles** — 4 explicit roles with permission matrix (pattern from Discord MEE6 / Telegram Combot):
+
+| Role | Powers |
+|---|---|
+| **admin** 👑 | Full power: user lifecycle, role mgmt, broadcast, delete |
+| **coacher** 🎓 | Handles users: KB, escalations, transcripts, settask, dm |
+| **service** ⚙️ | Read-only (debug, view users) for monitoring/automation |
+| **user** 👤 | Regular end user; own resources only |
+
+- New commands: `/promote <id> <role>`, `/demote <id>`, `/roles`, `/myrole`
+- `/help` is role-aware — shows only commands the caller can use
+- Internal notifications (pending users, escalations, KB pending) fan out to ALL holders of the relevant permission instead of only `SUPERVISOR_CHAT_ID`
+- `SUPERVISOR_CHAT_ID` auto-promoted to `admin` at boot (cannot be demoted)
+
+See [ADMIN_GUIDE §0](ADMIN_GUIDE.md) for the full permission matrix.
 
 ## What's new in v2.9
 
