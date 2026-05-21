@@ -1104,7 +1104,12 @@ async def promote_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
-    if not roles.set_role(uid, new_role):
+    try:
+        ok = roles.set_role(uid, new_role)
+    except roles.AdminCapReached as e:
+        await update.message.reply_text(f"⚠️ {e}", parse_mode="Markdown")
+        return
+    if not ok:
         await update.message.reply_text(
             f"Không thể thay đổi role cho user `{uid}` "
             f"(không tồn tại hoặc là supervisor).",

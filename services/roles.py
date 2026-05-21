@@ -99,10 +99,31 @@ def has_perm(user_id: int, perm: str) -> bool:
     return role in PERMISSIONS.get(perm, frozenset())
 
 
+class AdminCapReached(Exception):
+    """Raised when trying to promote past MAX_ADMINS."""
+
+
+def count_admins() -> int:
+    """Count current admin role-holders (excludes supervisor double-count)."""
+    s = settings()
+    row = conn().execute(
+        "SELECT COUNT(*) AS n FROM users WHERE role = 'admin'"
+    ).fetchone()
+    n = int(row["n"]) if row else 0
+    # Ensure supervisor is counted at least once even if their row hasn't synced.
+    sup_row = conn().execute(
+        "SELECT role FROM users WHERE tg_id = ?", (s.supervisor_chat_id,)
+    ).fetchone()
+    if not sup_row:
+        n += 1
+    return n
+
+
 def set_role(user_id: int, new_role: str) -> bool:
     """Set a user's role. Returns False if the role is invalid or user doesn't exist.
 
-    Refuses to demote the bootstrap supervisor.
+    Refuses to demote the bootstrap supervisor. Enforces MAX_ADMINS cap when
+    promoting to admin.
     """
     if new_role not in ROLES:
         return False
@@ -110,6 +131,20 @@ def set_role(user_id: int, new_role: str) -> bool:
     if user_id == s.supervisor_chat_id and new_role != "admin":
         log.warning("Refusing to demote bootstrap supervisor %s to %r", user_id, new_role)
         return False
+
+    # Cap check: only when ADDING a new admin (target not already admin)
+    if new_role == "admin":
+        current_role = get_role(user_id)
+        if current_role != "admin":
+            if count_admins() >= s.max_admins:
+                log.warning(
+                    "Refused promotion of %s to admin: cap %d reached",
+                    user_id, s.max_admins,
+                )
+                raise AdminCapReached(
+                    f"Đã đạt giới hạn {s.max_admins} admin. "
+                    f"/demote một admin hiện tại trước nếu muốn thêm người mới."
+                )
 
     from db import transaction
     with transaction() as cx:

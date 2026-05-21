@@ -44,6 +44,7 @@ class Settings:
     project_root: Path
     require_approval: bool        # if True, new users start as pending — admin must approve
     require_onboarding: bool      # if True, block non-essential cmds until tz is set
+    max_admins: int               # hard cap on number of admin role-holders (incl. supervisor)
 
 
 def load_settings() -> Settings:
@@ -70,6 +71,7 @@ def load_settings() -> Settings:
         project_root=PROJECT_ROOT,
         require_approval=os.getenv("REQUIRE_APPROVAL", "1").lower() not in ("0", "false", "no"),
         require_onboarding=os.getenv("REQUIRE_ONBOARDING", "1").lower() not in ("0", "false", "no"),
+        max_admins=_int("MAX_ADMINS", 2),
     )
 
 

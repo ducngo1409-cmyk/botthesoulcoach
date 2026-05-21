@@ -1,131 +1,162 @@
-# Soul Coach Bot — Session Handoff (v2.1)
+# Soul Coach Bot — Session Handoff (2026-05-21, v2.10.1)
 
-> Copy-paste this into a new session to resume work with full context.
+> Reading order for the next session:
+> **1. This file** (5 min) — current state, what to do first
+> **2. AUDIT.md** (10 min) — known limitations + roadmap
+> **3. SPEC.md** (10 min) — design source of truth
+> **4. ADMIN_GUIDE.md** §0 + §2 — RBAC roles + user mgmt
+> Skip USER_GUIDE / TESTPLAN unless touching those areas.
 
-## What this is
-A Python Telegram bot acting as a proactive mental coach. Pings users for scheduled task check-ins, answers questions from a curated Knowledge Base (KB), tracks satisfaction, escalates to a single Supervisor (S) when it can't help, and DMs S a weekly report. Workspace folder on disk: `Bot_The_Soul_Coach`.
+## 1. Current version: v2.10.1
 
-## Functional requirements (locked)
-- **Proactive reminders**: cron-scheduled per-user pings → DM with mood scale (😣😕😐🙂😄). 12h nudge, 24h mark missed. Restart-recovery for orphan check-ins.
-- **Crisis pre-filter**: EN+VI keyword list checked before any LLM call → safe-messaging reply with hotlines. No escalation triggered for crisis messages.
-- **KB Q&A**: free-text → fuzzy retrieval → if score ≥ threshold answer directly; else Gemini RAG soft-reply grounded in top-5 KB candidates.
-- **Satisfaction**: hybrid — explicit 👍/👎 buttons + EN+VI text classifier. `sat_counter` per user. +1 on negative, reset on positive. Threshold 5.
-- **Escalation triggers**: (a) KB miss + 👎 on LLM reply, (b) counter ≥ 5, (c) manual `/talk_to_human`. Notify single Supervisor with last 5 turns + inline "Mark resolved".
-- **Weekly report**: Sun 18:00 cron. Per-user check-in compliance, mood trend, interactions, escalations, KB-promotion candidates. Snippets redacted; `/transcript` for verbatim (audit-logged).
+| Layer | Tech | Status |
+|---|---|---|
+| Telegram | python-telegram-bot v21+ async | ✅ stable |
+| Hosting | GCP e2-micro free tier, `soul-coach` (us-central1-a) | ✅ active |
+| DB | SQLite WAL, 10 tables, in-process migration | ✅ stable |
+| Scheduler | APScheduler AsyncIOScheduler | ✅ stable, in-process |
+| LLM | Gemini Flash (2.5-lite primary, 4-model failover) | ✅ stable |
+| Tests | 14 smoke + 21 unit (35 total) | ✅ all pass |
+| CI | GitHub Actions `.github/workflows/ci.yml` | ✅ on every push |
+| Monitoring | UptimeRobot HTTP `:8080/health` | ✅ active |
 
-## Decisions made (don't re-litigate)
-1. KB in **SQLite `kb_entries` table**, S manages via `/kb_add /kb_list /kb_edit /kb_del`.
-2. **Single supervisor** (`SUPERVISOR_CHAT_ID`).
-3. Satisfaction = **hybrid** buttons + text inference (EN+VI).
-4. **24h** miss window, **12h** nudge.
-5. Mood scale on every check-in.
-6. **LLM soft-reply BEFORE escalation** on KB miss. 👍 → log as `kb_candidate=1` so S can `/kb_promote <interaction_id>` to grow KB. This is the learning loop.
-7. Privacy: report snippets redacted (60ch + sha1[:8]); `/transcript` for verbatim.
-8. Hosting: **Oracle Cloud Always Free, Ampere A1 Flex (2 OCPU/12 GB)**. Stay on Always Free account; never click "Upgrade to Pay-As-You-Go".
-9. `/pause` and `/resume` now actually call `scheduler().pause_job()` / `resume_job()` — not just a DB flag.
-10. Health check on `GET /health` port 8080 (daemon thread, no extra dependency).
-11. Timezone prompt on `/start` for new users. Reply validated with `pytz`; ignored if invalid.
+## 2. What works (feature inventory)
 
-## Tech stack
-`python-telegram-bot` v21+ (async, long-polling) · `APScheduler` AsyncIOScheduler in-process · stdlib `sqlite3` WAL mode + threading.RLock · `rapidfuzz>=3.11` with **`token_set_ratio`** scorer (NOT WRatio) · `google-generativeai` Gemini Flash · `pytz` for tz validation · PyYAML for one-time KB seed · **Python 3.11–3.13** (3.14 breaks the rapidfuzz build).
+### User-facing
+- `/start` request-to-join with admin approval
+- Onboarding: city/country/offset → IANA timezone (60+ aliases)
+- `/tz`, `/tasks`, `/addtask` (friendly time + cron), `/removetask`
+- `/pause [id]`, `/resume [id]`, `/nudge <id> <hours>` per-task control
+- `/talk_to_human` manual escalation
+- Free chat → KB hit → LLM fallback → offline empathy if all fail
+- Mood-emoji check-ins with 12h nudge + 24h missed
+- Crisis-keyword pre-filter (EN+VI)
 
-## Architecture
+### Admin (👑) / Coacher (🎓) / Service (⚙️) / User (👤)
+- RBAC with 12 permissions, explicit matrix (see services/roles.py)
+- 16+ admin commands: user mgmt, KB mgmt, escalation handling, communication, lifecycle, role mgmt
+- Max 2 admins (env `MAX_ADMINS`)
+- Auto fan-out: pending users → admins; escalations & KB pending → admins+coachers
+- Role-aware `/help` shows only what user can use
+
+### Infrastructure
+- Logrotate weekly, 4-week retention
+- Off-host backup via rclone (cron)
+- Idempotent migrations on every boot (4 columns added so far:
+  `kb_entries.status`, `tasks.nudge_hours+max_nudges`, `users.onboarded`,
+  `users.access_status`, `users.role`)
+
+## 3. Where things live
+
 ```
-main.py
-  ├── db.init_db()                      # schema.sql + seed kb_seed.yaml once
-  ├── start_health_server()             # daemon HTTP on HEALTH_PORT (8080)
-  ├── ApplicationBuilder().post_init    # then…
-  │       └── reminders.start_scheduler  # re-arm task jobs + weekly report
-  └── handlers:
-        Commands       → handlers/{onboarding,tasks,escalation,admin}.py
-        CallbackQuery  → mood:* / sat:* / resolve:*
-        TextMessage    → handlers/qa.py  (main Q&A flow)
+config.py                       env loader + Settings dataclass
+db.py                           init_db(), _migrate(), conn(), transaction()
+schema.sql                      10 tables (idempotent)
+main.py                         handler registration + scheduler bootstrap
 
 services/
-  kb.py           CRUD + cached fuzzy retrieval (token_set_ratio)
-  llm.py          Gemini RAG: prompt = system + KB ctx + history + query
-  satisfaction.py classify(text), counter ops, escalated state
-  reminders.py    schedule_task_job, mood_callback, orphan recovery
-  reports.py      weekly aggregate (markdown + JSON attachment)
-  health.py       GET /health daemon thread (NEW in v2.1)
+  roles.py        ← v2.10  permission matrix + role helpers + admin cap
+  llm.py                   model+key failover, 5xx/empty/network → next attempt
+  kb.py                    cached fuzzy retrieval, status filter, dedup gate
+  satisfaction.py          EN+VI regex sentiment + counter + escalated_at
+  reminders.py             APScheduler + per-task nudge config
+  timeparser.py            "daily 22:30" → "30 22 * * *"
+  tz_aliases.py            "Hanoi" → "Asia/Ho_Chi_Minh"
+  reports.py               weekly markdown + JSON
+  health.py                /health HTTP daemon
+
+handlers/
+  access.py       ← v2.7.2+v2.8  strict state-machine gate (group=-1)
+  onboarding.py            /start, /tz, /help (role-aware), tz reply handler
+  tasks.py                 /addtask /removetask /pause /resume /nudge /tasks
+  qa.py                    crisis → KB → LLM → offline empathy + auto-promote
+  escalation.py            /talk_to_human, fan-out to admins+coachers
+  admin.py                 all admin/coacher/service commands (29 handlers)
 ```
 
-Message pipeline in `qa.on_user_message`:
-1. `handle_tz_reply()` — consumed if user is in onboarding tz prompt
-2. `_log_in()` — log the message
-3. `_is_crisis()` — safe-messaging reply and return if crisis keyword matched
-4. `is_escalated()` — silent if escalated
-5. `classify()` — satisfaction signal from free text
-6. `kb.search()` — fuzzy retrieval
-7. Direct KB answer OR Gemini RAG
+## 4. Known limitations (see AUDIT.md for full)
 
-State machine per user: `IDLE → AWAITING_CHECKIN → IDLE` for reminders. `IDLE → IN_QA → {KB hit + 👍 IDLE / KB hit + 👎 c++ / KB miss → LLM → 👍 IDLE / 👎 ESCALATED / c==5 ESCALATED} → /resolve → IDLE c=0`.
+- Single SQLite connection → write contention above ~50/s
+- KB fuzzy search O(N) → noticeable above 5k entries
+- Sync LLM calls block the handler coroutine (other users unaffected though)
+- APScheduler in-process → single point of failure
+- No 2FA on admin role
+- Secrets in plaintext `.env`
+- No multi-instance support (would fire duplicate reminders)
 
-## Data model (10 tables)
-`users, tasks, check_ins, interactions, kb_entries, sessions, escalations, reports, audit_log` (see `schema.sql`). Key columns: `interactions.llm` (was reply LLM-generated), `interactions.satisfied` (NULL/0/1), `sessions.sat_counter`, `sessions.escalated_at`, `check_ins.mood` (1–5).
+Capacity ceiling at current setup: **~500 DAU comfortable, 2k tight, 10k+ needs rewrite.**
 
-## Project layout
-```
-Bot_The_Soul_Coach/
-├── SPEC.md README.md HANDOFF.md TESTPLAN.md
-├── config.py db.py main.py schema.sql kb_seed.yaml
-├── requirements.txt .env.example .gitignore
-├── handlers/  onboarding.py tasks.py qa.py escalation.py admin.py
-├── services/  kb.py llm.py satisfaction.py reminders.py reports.py health.py
-├── utils/     timez.py
-├── deploy/    ORACLE_DEPLOY.md soul-coach.service keepalive.{sh,service,timer}
-│              backup_offhost.sh
-├── .github/   workflows/ci.yml
-└── tests/     test_smoke.py test_unit.py
-```
+## 5. Open work / next priorities
 
-## Env vars
-**Required**: `TELEGRAM_TOKEN, SUPERVISOR_CHAT_ID, GEMINI_API_KEY`.
-**Optional defaults**: `GEMINI_MODEL=gemini-2.0-flash, DB_PATH=data/soul_coach.db, DEFAULT_TZ=Asia/Ho_Chi_Minh, REMINDER_NUDGE_HOURS=12, REMINDER_MISS_HOURS=24, REPORT_CRON=0 18 * * SUN, FUZZY_THRESHOLD=70, SAT_THRESHOLD=5, LOG_LEVEL=INFO, HEALTH_PORT=8080`.
+From AUDIT §7 roadmap:
 
-## Commands
-- **User**: `/start /help /tasks /addtask /removetask /pause /resume /talk_to_human`
-- **Supervisor**: `/users /report /resolve /transcript /kb_add /kb_list /kb_edit /kb_del /kb_promote`
-- `/addtask` syntax: `/addtask <title> | <5-field cron>` e.g. `/addtask Morning meditation | 0 8 * * *`. Validated via `CronTrigger.from_crontab`.
+**v2.11 (1-2 days)** — Observability
+- Structured JSON logging
+- Sentry SDK
+- `/debug` self-check (scheduler-alive, DB-writable, last LLM)
 
-## Oracle Always Free — two guarantees
-1. **Never charged**: stay on Always Free account, no upgrade. Set $0.01 budget alert. Only Always-Free-eligible resources can be created on a non-upgraded account.
-2. **Never reclaimed for being idle**: Oracle reclaims when 95p CPU < 20% over 7 days. `keepalive.timer` runs every 5 min and burns 60s of CPU = ~20% utilization rate. Also does SQLite WAL checkpoint so the work is useful. Log into console monthly (account idleness ≥ 30d can suspend).
+**v2.12 (2-3 days)** — User delight
+- `/snooze`, `/mood`, `/export`, `/forget`
+- "Skip today" button on check-ins
+- DST transition warnings
 
-## Important gotcha (real bug fixed during build)
-**Do NOT use `rapidfuzz.WRatio` for KB retrieval.** It returns 85+ even for completely unrelated queries (e.g. "how do I solder a microcontroller pin" scored 86). We use **`token_set_ratio`**, which scores 90–100 for genuine matches and 30–50 for unrelated queries. Threshold of 70 with this scorer correctly routes obscure queries to the LLM fallback. Documented in `services/kb.py` docstring.
+**v2.13 (1-2 days)** — Admin polish
+- Paginated `/users`
+- `/stats`, `/audit_log` viewer
+- Bulk approval
+- Audit every admin command
 
-## Done (v2.1 — all original TODO items completed)
-v2 spec locked · scaffold + requirements + README · DB + KB CRUD with cache invalidation · onboarding + task management + cron validation · APScheduler reminders (cron + 12h nudge + 24h miss + restart recovery + mood callback) · Q&A pipeline (KB → direct or Gemini RAG) · Gemini Flash client with grounded prompt + safety settings + crisis guardrails · EN/VI satisfaction classifier + counter + escalation state · 3 escalation paths with supervisor card + inline resolve · weekly report (markdown + JSON, redacted snippets, `/transcript`, `/kb_promote`) · Oracle deploy playbook + systemd unit + keepalive · smoke test passing.
+## 6. Quick start in a new session
 
-**v2.1 additions (this session):**
-- **Crisis filter**: `_CRISIS_KEYWORDS` list (EN+VI) in `handlers/qa.py`, checked before LLM
-- **Pause fix**: `/pause` now calls `scheduler().pause_job()` per task; `/resume` calls `resume_job()`
-- **Health endpoint**: `services/health.py` daemon HTTP thread; `HEALTH_PORT` env var
-- **Timezone prompt**: `handlers/onboarding.handle_tz_reply()` + `_awaiting_tz` set; `pytz` validation
-- **Unit tests**: `tests/test_unit.py` — 16 tests covering all v2.1 features, no credentials needed
-- **CI**: `.github/workflows/ci.yml` — smoke + unit jobs on every push/PR
-- **Off-host backups**: `deploy/backup_offhost.sh` — rclone to free remote, 14-day retention
-
-## TODO (remaining)
-- **Real run**: bot has never been pointed at a real Telegram token / Gemini key.
-- **`/transcript` week parsing**: uses SQLite `strftime('%W', …)` — ISO-ish, may drift across years.
-- **Embeddings retrieval (v2)**: drop-in for `KBRetriever` once KB > 50 entries.
-- **Off-host rclone setup**: `backup_offhost.sh` is written; `rclone config` still needs to run on the VM (see ORACLE_DEPLOY.md §7).
-- **UptimeRobot HTTP monitor**: wire up `http://<vm-ip>:8080/health` after deploy.
-
-## Known design limits (intentional)
-Single SQLite shared connection (fine for <100 users). APScheduler in-process — jobs re-armed from DB on boot so nothing is lost. Sentiment classifier is regex-based EN+VI, no negation handling — good enough for a satisfaction signal. Bot supports one Supervisor only. Timezone onboarding state (`_awaiting_tz`) is in-memory — lost on restart, which is fine (user can re-set tz anytime by contacting the supervisor or via a future `/settz` command).
-
-## Quick re-start in a new session
 ```bash
-cd Bot_The_Soul_Coach
-python3.13 -m venv .venv && source .venv/bin/activate   # use 3.11–3.13; 3.14 breaks rapidfuzz
-pip install -r requirements.txt
-cp .env.example .env  # fill TELEGRAM_TOKEN, SUPERVISOR_CHAT_ID, GEMINI_API_KEY
-python -m tests.test_smoke   # → ALL SMOKE TESTS PASSED
-python -m tests.test_unit    # → Ran 16 tests ... OK
-python main.py               # long-polls Telegram
+# 1. Pull latest, see what changed
+cd /Users/dustinngo/Project/Bot_The_Soul_Coach
+git log --oneline -5
+
+# 2. Verify tests pass
+source .venv/bin/activate
+python -m tests.test_smoke && python -m tests.test_unit
+
+# 3. Check VM is healthy
+gcloud compute ssh soul-coach --zone us-central1-a \
+  --command="sudo systemctl is-active soul-coach"
+
+# 4. Recent log activity
+gcloud compute ssh soul-coach --zone us-central1-a \
+  --command="sudo tail -30 /home/hallo_5ambloom/Bot_The_Soul_Coach/logs/bot.err.log"
+
+# 5. Check live DB state (users + KB count)
+gcloud compute ssh soul-coach --zone us-central1-a \
+  --command="sudo sqlite3 /home/hallo_5ambloom/Bot_The_Soul_Coach/data/soul_coach.db \
+  'SELECT tg_id, name, role, access_status FROM users; \
+   SELECT COUNT(*) FROM kb_entries WHERE status=\"active\"'"
 ```
 
-Production: follow `deploy/ORACLE_DEPLOY.md` §1–§11.
+## 7. Don't break these invariants
+
+When making changes, preserve:
+
+1. **State persistence** — never store onboarding/approval/escalated state in module variables; always DB-backed
+2. **Failover chain** — LLM call must continue on 429/5xx/empty/network errors; only raise after all attempts
+3. **Bot must never go silent** — offline empathy fallback in qa.py covers the all-fail case
+4. **Bootstrap admin** — `SUPERVISOR_CHAT_ID` is always coerced to role=admin in `db._migrate()`
+5. **Pending users blocked** — `access.gate` runs at `group=-1`; raises `ApplicationHandlerStop` to drop them
+6. **Crisis route bypasses everything** — qa.py `_is_crisis()` runs before LLM/KB lookup
+7. **Idempotent migrations** — `_migrate()` runs on every boot; new columns use `ALTER TABLE` with default that doesn't break old rows
+8. **Admin cap** — `MAX_ADMINS` (default 2) enforced in `roles.set_role()` via `AdminCapReached`
+
+## 8. First message for the next session
+
+Paste this into a new Claude Code session to resume:
+
+```
+Resume Soul Coach bot project at /Users/dustinngo/Project/Bot_The_Soul_Coach
+(v2.10.1). Read HANDOFF.md first, then AUDIT.md for what's next.
+Today I want to: <fill in what you want to do>
+```
+
+If you want to continue from the roadmap, common next steps:
+- "Implement /snooze command" (v2.12)
+- "Add structured JSON logging" (v2.11)
+- "Paginate /users command" (v2.13)
+- "Async LLM calls" (v3.0 prep)

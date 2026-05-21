@@ -204,6 +204,15 @@ def main() -> int:
     # list_staff returns grouped
     staff = roles.list_staff()
     assert "admin" in staff and "coacher" in staff and "service" in staff
+    # Admin cap test
+    # Currently bootstrap supervisor + 99100 = 2 admins, equals cap.
+    # Promoting another should raise AdminCapReached.
+    try:
+        roles.set_role(99101, "admin")  # 99101 is currently coacher
+        raised = False
+    except roles.AdminCapReached:
+        raised = True
+    assert raised, "expected AdminCapReached when promoting beyond cap"
     # Clean
     db.conn().execute("DELETE FROM users WHERE tg_id IN (99100,99101,99102,99103)")
     print("    OK")
