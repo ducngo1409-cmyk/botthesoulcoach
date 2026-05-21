@@ -1,8 +1,9 @@
-# Soul Coach Telegram Bot — Specification (v2.8)
+# Soul Coach Telegram Bot — Specification (v2.9)
 
 > Source of truth for implementation. Updated as features land.
 >
-> **v2.8** (current): Request-to-join approval model — anyone can /start, admin gets DM with Approve/Reject buttons, user locked until approved. Replaces env-based ALLOWED_USER_IDS allowlist.
+> **v2.9** (current): Full user-management suite for supervisor — `/users [filter]`, `/user <id>`, `/user_tasks`, `/revoke`, `/block`/`/unblock`, `/freeze`/`/unfreeze`, `/dm`, `/broadcast`, `/reonboard`, `/delete_user`.
+> v2.8: Request-to-join approval model — anyone can /start, admin gets DM with Approve/Reject buttons, user locked until approved. Replaces env-based ALLOWED_USER_IDS allowlist.
 > v2.7.2: DB-backed onboarding state survives restarts; strict state-machine isolation in access.gate.
 > v2.7.1: Mandatory onboarding enforcement, fix "không" skip-keyword regression, USER_GUIDE + ADMIN_GUIDE.
 > v2.7: Friendly time parser, timezone aliases + `/tz` command, per-task pause/resume by id, per-task nudge config (`/nudge`), improved welcome and help.
@@ -209,10 +210,21 @@ Failure returns a friendly help text with worked examples — used as the `/addt
 | `/report` | S | On-demand weekly report |
 | `/resolve <user_id>` | S | Close escalation |
 | `/transcript <user_id> [YYYY-WW]` | S | View verbatim history |
-| `/users` | S | All users with status badges (✅⏳🚫) |
+| `/users [filter]` | S | List users; filter ∈ {pending, approved, rejected, active, paused, blocked} |
+| `/user <user_id>` | S | Detailed profile + stats |
+| `/user_tasks <user_id>` | S | List reminders for a user |
 | `/pending` | S | List users awaiting access approval |
 | `/approve <user_id>` | S | Grant access to a pending user |
-| `/reject <user_id>` | S | Deny access |
+| `/reject <user_id>` | S | Deny access (for pending users) |
+| `/revoke <user_id>` | S | Take back an approved user's access |
+| `/block <user_id>` | S | Set status=blocked (bot stops sending) |
+| `/unblock <user_id>` | S | Reverse block |
+| `/freeze <user_id>` | S | Pause all reminders for a user |
+| `/unfreeze <user_id>` | S | Resume |
+| `/dm <user_id> <msg>` | S | DM a specific user via the bot |
+| `/broadcast <msg>` | S | DM all approved+active users (skipping S) |
+| `/reonboard <user_id>` | S | Force the user to re-do tz onboarding |
+| `/delete_user <user_id> confirm` | S | Hard delete user + all related rows (CASCADE) |
 | `/settask <user_id> \| <title> \| <cron>` | S | Assign reminder to a user |
 | `/kb_add <cat> \| <q> \| <a> \| <kw>` | S | Add active KB entry |
 | `/kb_list [cat]` | S | Browse |

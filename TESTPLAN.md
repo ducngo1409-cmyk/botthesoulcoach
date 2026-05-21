@@ -1,4 +1,4 @@
-# Soul Coach Bot — Test Plan (v2.7)
+# Soul Coach Bot — Test Plan (v2.9)
 
 Two automated test suites cover all logic that doesn't require live credentials.
 Manual integration tests are listed for first-run verification before going to production.
@@ -140,6 +140,26 @@ python main.py
 
 ### 2.10 /debug
 - [ ] `/debug` snapshot includes: users count, **KB active + pending counts**, escalated sessions, open escalations, recent LLM replies
+
+### 2.10b User management (v2.9)
+- [ ] **Request-to-join (v2.8)**: Account khác /start → bạn nhận DM với 2 nút; user nhận "đã gửi yêu cầu"
+- [ ] Tap ✅ Duyệt → user nhận "✅ Được chấp nhận"; nút biến mất, message edit thành "Approved"
+- [ ] Tap ❌ Từ chối → user bị flag rejected, không nhận thông báo
+- [ ] `/pending` → list pending users
+- [ ] `/approve <id>` / `/reject <id>` từ chat → tương đương nút
+- [ ] **View commands**: `/users` → list tất cả với badges; `/users pending` → chỉ pending; `/users blocked` → chỉ blocked
+- [ ] `/user <id>` → profile chi tiết với stats (tasks, interactions, mood avg, last seen)
+- [ ] `/user_tasks <id>` → list reminders của user
+- [ ] **Access**: `/revoke <id>` (approved user) → flip to rejected, user nhận DM "đã bị thu hồi"; gate chặn từ giờ
+- [ ] **Operational**: `/block <id>` → status=blocked; reminder không fire; bot không reply; `/unblock` → restore
+- [ ] `/freeze <id>` → status=paused; reminder dừng nhưng bot vẫn reply chat; `/unfreeze` → resume
+- [ ] **Communication**: `/dm <id> Hello` → user nhận `💌 Tin từ coach: Hello`
+- [ ] `/broadcast Thông báo tuần này` → tất cả approved+active nhận `📢 Thông báo từ coach: ...`; S nhận summary "gửi thành công N/M"
+- [ ] **Lifecycle**: `/reonboard <id>` → user nhận DM "admin đã reset thiết lập"; lần nhắn kế tiếp bị vào tz prompt
+- [ ] `/delete_user <id>` không có "confirm" → bot yêu cầu xác nhận, hiện tên user
+- [ ] `/delete_user <id> confirm` → user + tasks + interactions xóa hết; ghi audit_log; jobs unschedule
+- [ ] **Sanity**: `/revoke <supervisor_id>` → bot từ chối "Không thể revoke supervisor"
+- [ ] `/delete_user <supervisor_id> confirm` → bot từ chối "Không thể xóa supervisor"
 
 ### 2.11 KB management (manual)
 - [ ] `/kb_add test | What is X? | X is a test. | x,test`

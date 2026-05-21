@@ -2,7 +2,7 @@
 
 > Hướng dẫn dành cho **Supervisor (S)** — người vận hành bot, duyệt KB, theo dõi escalation, deploy.
 >
-> Phiên bản: v2.7 (2026-05)
+> Phiên bản: v2.9 (2026-05)
 
 ---
 
@@ -67,6 +67,104 @@ Restart bot — mọi user mới sẽ auto-approved khi /start. Dùng cho dev/te
 ### 2.5 Supervisor luôn được auto-approved
 
 Bạn (S) không bao giờ rơi vào pending — `SUPERVISOR_CHAT_ID` bypass mọi gate.
+
+---
+
+## 2bis. Quản lý user (v2.9)
+
+Bot có 2 trục trạng thái độc lập:
+
+| Trục | Cột DB | Giá trị | Tác dụng |
+|---|---|---|---|
+| **Access** | `access_status` | `pending` / `approved` / `rejected` | Quyền truy cập tổng thể |
+| **Operational** | `status` | `active` / `paused` / `blocked` | Bot có gửi reminder/tin không |
+
+User chỉ dùng được bot khi `access_status='approved'` AND `status='active'`.
+
+### 2bis.1 View / inspect
+
+| Lệnh | Việc làm |
+|---|---|
+| `/users` | List tất cả user với badge ✅⏳🚫 và 🔕⛔ |
+| `/users pending` | Chỉ pending |
+| `/users approved` / `rejected` | Theo access state |
+| `/users active` / `paused` / `blocked` | Theo operational state |
+| `/user <id>` | Profile chi tiết + stats (tasks, interactions, escalations, mood avg, last seen) |
+| `/user_tasks <id>` | Liệt kê task của user |
+| `/transcript <id> [YYYY-WW]` | Lịch sử hội thoại |
+
+Output mẫu `/user 12345`:
+```
+👤 Nguyễn Văn A
+🆔 12345
+🕐 Asia/Ho_Chi_Minh
+✅ access: approved
+🟢 status: active
+📋 onboarding: ✅ done
+📅 joined: 2026-05-05 17:20:00
+
+📊 Stats
+• Tasks: 3
+• Interactions: 142
+• Escalations: 1 (0 open)
+• Mood: avg 3.7/5 (24 ratings)
+• Last interaction: 2026-05-21 14:32:15
+```
+
+### 2bis.2 Access management
+
+| Lệnh | Effect |
+|---|---|
+| `/approve <id>` | `pending → approved`, user nhận DM "đã được chấp nhận" |
+| `/reject <id>` | `pending → rejected` (không notify) |
+| `/revoke <id>` | `approved → rejected`, user nhận DM "đã bị thu hồi" |
+
+### 2bis.3 Operational state (không đụng access)
+
+| Lệnh | Effect |
+|---|---|
+| `/block <id>` | `status=blocked`, bot ngưng mọi outgoing (reminder + reply) |
+| `/unblock <id>` | `blocked → active` |
+| `/freeze <id>` | `status=paused` + APScheduler pause tất cả task job của user |
+| `/unfreeze <id>` | `paused → active` + resume jobs |
+
+Phân biệt:
+- **revoke** = thu hồi quyền truy cập (mạnh nhất, user thấy thông báo)
+- **block** = bot không gửi gì cho user (vẫn approved, nhưng câm)
+- **freeze** = chỉ tắt reminder, user vẫn nhắn được bot bình thường
+
+### 2bis.4 Communication
+
+| Lệnh | Việc làm |
+|---|---|
+| `/dm <id> <msg>` | Bot gửi DM cho 1 user — hiển thị `💌 Tin từ coach: <msg>` |
+| `/broadcast <msg>` | Gửi cho TẤT CẢ user approved+active (trừ S) — `📢 Thông báo từ coach: <msg>`. Báo cáo số thành công/thất bại |
+
+> ⚠️ `/broadcast` không có undo — soạn nội dung kỹ trước.
+
+### 2bis.5 Lifecycle
+
+| Lệnh | Việc làm |
+|---|---|
+| `/reonboard <id>` | Reset onboarding (`onboarded=0`). User phải set tz lại lần nhắn kế tiếp |
+| `/delete_user <id>` | Yêu cầu xác nhận: trả về tên user + lệnh `confirm` |
+| `/delete_user <id> confirm` | **XÓA HẲN** user + cascade tasks/interactions/sessions/escalations/check_ins. Ghi audit log. Không hồi phục được |
+
+### 2bis.6 Lifecycle hoàn chỉnh của 1 user
+
+```
+[Search bot]
+     ↓ /start
+[pending]──/approve──▶[approved + onboarding]──tz set──▶[approved + active]
+     │ /reject               │                                │
+     ▼                       ▼ /reonboard                     │
+[rejected]              [approved + onboarding]               │
+                                                              ▼
+                                                    /freeze ──▶ [paused] ──/unfreeze──▶
+                                                    /block ──▶ [blocked] ──/unblock──▶
+                                                    /revoke ──▶ [rejected]
+                                                    /delete_user confirm ──▶ (gone)
+```
 
 ---
 

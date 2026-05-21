@@ -197,23 +197,518 @@ async def user_review_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/users [filter] — list users, optionally filtered.
+
+    Filters: pending | approved | rejected | active | paused | blocked
+    """
     if not _is_supervisor(update):
         return
+
+    valid_access = {"pending", "approved", "rejected"}
+    valid_status = {"active", "paused", "blocked"}
+    where = ""
+    params: tuple = ()
+    filt = (context.args[0].lower() if context.args else "").strip()
+
+    if filt in valid_access:
+        where = "WHERE access_status = ?"
+        params = (filt,)
+        header = f"👥 *Users — {filt}*"
+    elif filt in valid_status:
+        where = "WHERE status = ?"
+        params = (filt,)
+        header = f"👥 *Users — {filt}*"
+    elif filt and filt != "all":
+        await update.message.reply_text(
+            "Filter không hợp lệ. Dùng: `pending`, `approved`, `rejected`, "
+            "`active`, `paused`, `blocked`, hoặc bỏ trống để xem tất cả.",
+            parse_mode="Markdown",
+        )
+        return
+    else:
+        header = "👥 *Users (tất cả)*"
+
     rows = conn().execute(
-        "SELECT tg_id, name, status, access_status, joined_at FROM users ORDER BY joined_at"
+        f"SELECT tg_id, name, status, access_status, onboarded, joined_at "
+        f"FROM users {where} ORDER BY joined_at DESC",
+        params,
+    ).fetchall()
+
+    if not rows:
+        await update.message.reply_text("Không có user nào khớp.")
+        return
+
+    access_badge = {"approved": "✅", "pending": "⏳", "rejected": "🚫"}
+    status_badge = {"active": "", "paused": " 🔕", "blocked": " ⛔"}
+    lines = [f"{header} ({len(rows)})\n"]
+    for r in rows:
+        ab = access_badge.get(r["access_status"], "?")
+        sb = status_badge.get(r["status"], "")
+        onboard_mark = "" if r["onboarded"] else " 🕐"
+        lines.append(
+            f"{ab}{sb}{onboard_mark} `{r['tg_id']}` *{r['name'] or '?'}* — "
+            f"joined {r['joined_at'][:10]}"
+        )
+
+    text = "\n".join(lines)
+    if len(text) > 3500:
+        text = text[:3500] + "\n…(truncated)"
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/user <id> — detailed profile + stats for a single user."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/user <user_id>`", parse_mode="Markdown"
+        )
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+
+    row = conn().execute(
+        "SELECT tg_id, name, tz, status, access_status, onboarded, joined_at "
+        "FROM users WHERE tg_id = ?",
+        (uid,),
+    ).fetchone()
+    if not row:
+        await update.message.reply_text(f"User `{uid}` không tồn tại.", parse_mode="Markdown")
+        return
+
+    # Stats
+    task_count = conn().execute(
+        "SELECT COUNT(*) AS n FROM tasks WHERE user_id = ?", (uid,)
+    ).fetchone()["n"]
+    inter_count = conn().execute(
+        "SELECT COUNT(*) AS n FROM interactions WHERE user_id = ?", (uid,)
+    ).fetchone()["n"]
+    esc_count = conn().execute(
+        "SELECT COUNT(*) AS n FROM escalations WHERE user_id = ?", (uid,)
+    ).fetchone()["n"]
+    open_esc = conn().execute(
+        "SELECT COUNT(*) AS n FROM escalations "
+        "WHERE user_id = ? AND resolved_at IS NULL",
+        (uid,),
+    ).fetchone()["n"]
+    mood_row = conn().execute(
+        "SELECT AVG(mood) AS avg_mood, COUNT(mood) AS n FROM check_ins "
+        "WHERE user_id = ? AND mood IS NOT NULL",
+        (uid,),
+    ).fetchone()
+    last_int = conn().execute(
+        "SELECT ts FROM interactions WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+        (uid,),
+    ).fetchone()
+
+    access_badge = {"approved": "✅", "pending": "⏳", "rejected": "🚫"}
+    status_badge = {"active": "🟢", "paused": "🔕", "blocked": "⛔"}
+    onboard_txt = "✅ done" if row["onboarded"] else "🕐 awaiting tz"
+
+    lines = [
+        f"👤 *{row['name'] or '?'}*",
+        f"🆔 `{row['tg_id']}`",
+        f"🕐 {row['tz']}",
+        f"{access_badge.get(row['access_status'], '?')} access: *{row['access_status']}*",
+        f"{status_badge.get(row['status'], '?')} status: *{row['status']}*",
+        f"📋 onboarding: {onboard_txt}",
+        f"📅 joined: {row['joined_at']}",
+        "",
+        "📊 *Stats*",
+        f"• Tasks: {task_count}",
+        f"• Interactions: {inter_count}",
+        f"• Escalations: {esc_count} ({open_esc} open)",
+    ]
+    if mood_row["n"]:
+        lines.append(f"• Mood: avg {mood_row['avg_mood']:.1f}/5 ({mood_row['n']} ratings)")
+    if last_int:
+        lines.append(f"• Last interaction: {last_int['ts']}")
+
+    lines.append(
+        "\n_Actions:_ `/user_tasks {uid}` `/transcript {uid}` "
+        "`/dm {uid} <msg>` `/freeze {uid}` `/revoke {uid}` `/delete_user {uid}`".format(uid=uid)
+    )
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def user_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/user_tasks <id> — list all reminders for a user."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/user_tasks <user_id>`", parse_mode="Markdown"
+        )
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+    rows = conn().execute(
+        "SELECT id, title, cron_expr, active, nudge_hours, max_nudges "
+        "FROM tasks WHERE user_id = ? ORDER BY id",
+        (uid,),
     ).fetchall()
     if not rows:
-        await update.message.reply_text("No users registered yet.")
+        await update.message.reply_text(f"User `{uid}` chưa có nhắc nhở nào.", parse_mode="Markdown")
         return
-    lines = ["👥 *Users*"]
-    badge = {"approved": "✅", "pending": "⏳", "rejected": "🚫"}
+    lines = [f"📌 *Tasks của user {uid}* ({len(rows)})\n"]
     for r in rows:
-        b = badge.get(r["access_status"], "?")
-        lines.append(
-            f"{b} `{r['tg_id']}` *{r['name'] or '?'}* — "
-            f"{r['status']} — joined {r['joined_at']}"
-        )
+        flag = "✅" if r["active"] else "⏸"
+        nudge = ""
+        if r["nudge_hours"] == 0 or r["max_nudges"] == 0:
+            nudge = " • 🔕 no nudge"
+        elif r["nudge_hours"]:
+            nudge = f" • nudge {r['nudge_hours']}h"
+        lines.append(f"{flag} `#{r['id']}` *{r['title']}* — `{r['cron_expr']}`{nudge}")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+# --- Access control ------------------------------------------------------
+
+async def revoke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/revoke <user_id> — take back an approved user's access."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/revoke <user_id>`", parse_mode="Markdown"
+        )
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+    if uid == settings().supervisor_chat_id:
+        await update.message.reply_text("⚠️ Không thể revoke supervisor.")
+        return
+
+    with transaction() as cx:
+        cur = cx.execute(
+            "UPDATE users SET access_status = 'rejected' WHERE tg_id = ?",
+            (uid,),
+        )
+    if cur.rowcount == 0:
+        await update.message.reply_text(f"User `{uid}` không tồn tại.", parse_mode="Markdown")
+        return
+    await update.message.reply_text(f"🚫 Đã thu hồi quyền user `{uid}`.", parse_mode="Markdown")
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text="ℹ️ Quyền truy cập của bạn đã bị thu hồi bởi admin.",
+        )
+    except Exception:
+        log.warning("Could not notify revoked user %s", uid)
+    log.info("Supervisor revoked user %s", uid)
+
+
+# --- Operational state (block / freeze) ----------------------------------
+
+async def block_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/block <user_id> — mark user as blocked (bot stops sending to them)."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: `/block <user_id>`", parse_mode="Markdown")
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+    if uid == settings().supervisor_chat_id:
+        await update.message.reply_text("⚠️ Không thể block supervisor.")
+        return
+    with transaction() as cx:
+        cur = cx.execute("UPDATE users SET status = 'blocked' WHERE tg_id = ?", (uid,))
+    if cur.rowcount == 0:
+        await update.message.reply_text(f"User `{uid}` không tồn tại.", parse_mode="Markdown")
+        return
+    await update.message.reply_text(f"⛔ Đã block user `{uid}`.", parse_mode="Markdown")
+    log.info("Supervisor blocked user %s", uid)
+
+
+async def unblock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/unblock <user_id> — restore status to 'active'."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: `/unblock <user_id>`", parse_mode="Markdown")
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+    with transaction() as cx:
+        cur = cx.execute(
+            "UPDATE users SET status = 'active' WHERE tg_id = ? AND status = 'blocked'",
+            (uid,),
+        )
+    if cur.rowcount == 0:
+        await update.message.reply_text(
+            f"User `{uid}` không bị block (hoặc không tồn tại).", parse_mode="Markdown"
+        )
+        return
+    await update.message.reply_text(f"🟢 Đã unblock user `{uid}`.", parse_mode="Markdown")
+    log.info("Supervisor unblocked user %s", uid)
+
+
+async def freeze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/freeze <user_id> — pause all reminders for a user (status='paused')."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: `/freeze <user_id>`", parse_mode="Markdown")
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+    with transaction() as cx:
+        cur = cx.execute("UPDATE users SET status = 'paused' WHERE tg_id = ?", (uid,))
+    if cur.rowcount == 0:
+        await update.message.reply_text(f"User `{uid}` không tồn tại.", parse_mode="Markdown")
+        return
+
+    # Pause all their scheduled jobs
+    from services.reminders import scheduler
+    tasks = conn().execute(
+        "SELECT id FROM tasks WHERE user_id = ? AND active = 1", (uid,)
+    ).fetchall()
+    paused = 0
+    for t in tasks:
+        try:
+            scheduler().pause_job(f"task:{t['id']}:send")
+            paused += 1
+        except Exception:
+            pass
+    await update.message.reply_text(
+        f"🔕 Đã freeze user `{uid}` ({paused} jobs paused).", parse_mode="Markdown"
+    )
+    log.info("Supervisor froze user %s (%d jobs)", uid, paused)
+
+
+async def unfreeze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/unfreeze <user_id> — resume reminders."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: `/unfreeze <user_id>`", parse_mode="Markdown")
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+    with transaction() as cx:
+        cur = cx.execute(
+            "UPDATE users SET status = 'active' WHERE tg_id = ? AND status = 'paused'",
+            (uid,),
+        )
+    if cur.rowcount == 0:
+        await update.message.reply_text(
+            f"User `{uid}` không bị freeze (hoặc không tồn tại).", parse_mode="Markdown"
+        )
+        return
+
+    from services.reminders import scheduler
+    tasks = conn().execute(
+        "SELECT id FROM tasks WHERE user_id = ? AND active = 1", (uid,)
+    ).fetchall()
+    resumed = 0
+    for t in tasks:
+        try:
+            scheduler().resume_job(f"task:{t['id']}:send")
+            resumed += 1
+        except Exception:
+            pass
+    await update.message.reply_text(
+        f"🟢 Đã unfreeze user `{uid}` ({resumed} jobs resumed).", parse_mode="Markdown"
+    )
+    log.info("Supervisor unfroze user %s (%d jobs)", uid, resumed)
+
+
+# --- Communication -------------------------------------------------------
+
+async def dm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/dm <user_id> <message> — admin DMs a user directly through the bot."""
+    if not _is_supervisor(update):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "Usage: `/dm <user_id> <message>`\n"
+            "Vd: `/dm 12345 Xin chào, mình là coach.`",
+            parse_mode="Markdown",
+        )
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+    body = " ".join(context.args[1:])
+    if not body.strip():
+        await update.message.reply_text("Nội dung không được trống.")
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text=f"💌 *Tin từ coach:*\n\n{body}",
+            parse_mode="Markdown",
+        )
+        await update.message.reply_text(f"✅ Đã gửi tin cho user `{uid}`.", parse_mode="Markdown")
+        log.info("Supervisor DMed user %s: %r", uid, body[:80])
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Gửi thất bại: {e}")
+
+
+async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/broadcast <message> — send a message to all approved+active users."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/broadcast <message>`\n"
+            "Sẽ gửi cho tất cả user *approved* và *active*.",
+            parse_mode="Markdown",
+        )
+        return
+    body = " ".join(context.args).strip()
+    if not body:
+        await update.message.reply_text("Nội dung không được trống.")
+        return
+
+    rows = conn().execute(
+        "SELECT tg_id FROM users "
+        "WHERE access_status = 'approved' AND status = 'active' "
+        "AND tg_id != ?",
+        (settings().supervisor_chat_id,),
+    ).fetchall()
+
+    if not rows:
+        await update.message.reply_text("Không có user nào để gửi.")
+        return
+
+    sent = 0
+    failed = 0
+    text = f"📢 *Thông báo từ coach:*\n\n{body}"
+    for r in rows:
+        try:
+            await context.bot.send_message(chat_id=r["tg_id"], text=text, parse_mode="Markdown")
+            sent += 1
+        except Exception:
+            failed += 1
+            log.warning("Broadcast to %s failed", r["tg_id"])
+
+    await update.message.reply_text(
+        f"📊 Broadcast: gửi thành công {sent}/{len(rows)} (thất bại {failed})."
+    )
+    log.info("Supervisor broadcast to %d users (%d failed): %r", sent, failed, body[:80])
+
+
+# --- Lifecycle -----------------------------------------------------------
+
+async def reonboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/reonboard <user_id> — clear onboarded flag, force tz re-prompt."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: `/reonboard <user_id>`", parse_mode="Markdown")
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+    with transaction() as cx:
+        cur = cx.execute("UPDATE users SET onboarded = 0 WHERE tg_id = ?", (uid,))
+    if cur.rowcount == 0:
+        await update.message.reply_text(f"User `{uid}` không tồn tại.", parse_mode="Markdown")
+        return
+    await update.message.reply_text(
+        f"🔄 Đã reset onboarding cho user `{uid}`. Lần nhắn tiếp theo họ sẽ phải set tz lại.",
+        parse_mode="Markdown",
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text="ℹ️ Admin đã reset thiết lập múi giờ. Vui lòng gõ /start hoặc nhắn tên thành phố để cập nhật.",
+        )
+    except Exception:
+        pass
+    log.info("Supervisor re-onboarded user %s", uid)
+
+
+async def delete_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/delete_user <user_id> [confirm] — hard delete user + all related rows."""
+    if not _is_supervisor(update):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/delete_user <user_id> confirm`\n"
+            "⚠️ Hành động này XÓA HẲN user và toàn bộ data (tasks, interactions, "
+            "escalations, sessions). Không thể hồi phục.",
+            parse_mode="Markdown",
+        )
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+    if uid == settings().supervisor_chat_id:
+        await update.message.reply_text("⚠️ Không thể xóa supervisor.")
+        return
+
+    confirm = (context.args[1] if len(context.args) > 1 else "").lower()
+    if confirm != "confirm":
+        row = conn().execute("SELECT name FROM users WHERE tg_id = ?", (uid,)).fetchone()
+        if not row:
+            await update.message.reply_text(f"User `{uid}` không tồn tại.", parse_mode="Markdown")
+            return
+        await update.message.reply_text(
+            f"⚠️ Xác nhận xóa user `{uid}` *{row['name'] or '?'}*?\n"
+            f"Gõ lại: `/delete_user {uid} confirm`",
+            parse_mode="Markdown",
+        )
+        return
+
+    # First unschedule any task jobs
+    from services.reminders import scheduler
+    tasks = conn().execute("SELECT id FROM tasks WHERE user_id = ?", (uid,)).fetchall()
+    for t in tasks:
+        try:
+            scheduler().remove_job(f"task:{t['id']}:send")
+        except Exception:
+            pass
+
+    # CASCADE deletes will handle tasks/check_ins/interactions/sessions/escalations
+    with transaction() as cx:
+        cur = cx.execute("DELETE FROM users WHERE tg_id = ?", (uid,))
+    if cur.rowcount == 0:
+        await update.message.reply_text(f"User `{uid}` không tồn tại.", parse_mode="Markdown")
+        return
+
+    # Audit log
+    with transaction() as cx:
+        cx.execute(
+            "INSERT INTO audit_log (actor, action, target) VALUES (?, ?, ?)",
+            (update.effective_user.id, "delete_user", str(uid)),
+        )
+    await update.message.reply_text(
+        f"🗑 Đã xóa user `{uid}` và toàn bộ data liên quan.", parse_mode="Markdown"
+    )
+    log.warning("Supervisor DELETED user %s (with all data)", uid)
 
 
 async def transcript_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

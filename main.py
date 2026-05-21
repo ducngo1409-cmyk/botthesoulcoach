@@ -76,9 +76,22 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("kb_reject", admin.kb_reject))
     app.add_handler(CommandHandler("settask", admin.settask))
     app.add_handler(CommandHandler("debug", admin.debug_cmd))
+
+    # User management (v2.9)
     app.add_handler(CommandHandler("pending", admin.pending_cmd))
     app.add_handler(CommandHandler("approve", admin.approve_cmd))
     app.add_handler(CommandHandler("reject", admin.reject_cmd))
+    app.add_handler(CommandHandler("revoke", admin.revoke_cmd))
+    app.add_handler(CommandHandler("user", admin.user_cmd))
+    app.add_handler(CommandHandler("user_tasks", admin.user_tasks_cmd))
+    app.add_handler(CommandHandler("block", admin.block_cmd))
+    app.add_handler(CommandHandler("unblock", admin.unblock_cmd))
+    app.add_handler(CommandHandler("freeze", admin.freeze_cmd))
+    app.add_handler(CommandHandler("unfreeze", admin.unfreeze_cmd))
+    app.add_handler(CommandHandler("dm", admin.dm_cmd))
+    app.add_handler(CommandHandler("broadcast", admin.broadcast_cmd))
+    app.add_handler(CommandHandler("reonboard", admin.reonboard_cmd))
+    app.add_handler(CommandHandler("delete_user", admin.delete_user_cmd))
 
     # --- Callback queries ---
     app.add_handler(CallbackQueryHandler(reminders.mood_callback, pattern=r"^mood:"))

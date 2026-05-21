@@ -1,4 +1,4 @@
-# Soul Coach — Telegram Bot (v2.8)
+# Soul Coach — Telegram Bot (v2.9)
 
 A Vietnamese-first mental-coach Telegram bot. Pings users for task check-ins, answers
 from a curated Knowledge Base (KB), uses Gemini Flash as a grounded RAG fallback
@@ -14,6 +14,18 @@ report.
 | Developer | [SPEC.md](SPEC.md) — full design |
 | QA | [TESTPLAN.md](TESTPLAN.md) — test strategy |
 | DevOps | [deploy/GCP_DEPLOY.md](deploy/GCP_DEPLOY.md) — step-by-step deploy |
+
+## What's new in v2.9
+
+Full user-management suite for supervisor:
+
+- **View**: `/users [filter]` (filter by access or operational state), `/user <id>` (profile + stats), `/user_tasks <id>`
+- **Access**: `/revoke <id>` (take back approved access)
+- **Operational**: `/block`/`/unblock`, `/freeze`/`/unfreeze`
+- **Communicate**: `/dm <id> <msg>`, `/broadcast <msg>` (to all approved+active)
+- **Lifecycle**: `/reonboard <id>` (force tz re-prompt), `/delete_user <id> confirm` (hard delete + cascade)
+
+See [ADMIN_GUIDE.md §2bis](ADMIN_GUIDE.md) for the full reference.
 
 ## What's new in v2.8
 
@@ -108,11 +120,9 @@ User Telegram commands:
 - `/talk_to_human` — connect to a human coach
 
 Supervisor Telegram commands:
-- `/debug` — live snapshot (users, KB active+pending, escalations, recent LLM replies)
-- `/kb_pending`, `/kb_approve <id>`, `/kb_reject <id>` — manage pending review queue
-- `/report` — on-demand weekly report
-- `/resolve <uid>` — close a stuck escalation
-- `/settask <uid> | <title> | <time>` — assign a reminder (friendly time supported)
+- **User mgmt (v2.9)**: `/users [filter]`, `/user <id>`, `/user_tasks <id>`, `/pending`, `/approve`/`/reject`/`/revoke`, `/block`/`/unblock`, `/freeze`/`/unfreeze`, `/dm <id> <msg>`, `/broadcast <msg>`, `/reonboard <id>`, `/delete_user <id> confirm`
+- **KB mgmt**: `/kb_pending`, `/kb_approve <id>`, `/kb_reject <id>`, `/kb_add`, `/kb_list`, `/kb_edit`, `/kb_del`, `/kb_promote`
+- **Ops**: `/debug` (live snapshot), `/report` (on-demand weekly), `/resolve <uid>` (close escalation), `/transcript <uid>`, `/settask <uid> | <title> | <time>` (assign with friendly time)
 
 ## Production deploy
 
