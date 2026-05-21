@@ -167,9 +167,12 @@ class TestTimezonePrompt(unittest.IsolatedAsyncioTestCase):
     async def test_returning_user_no_tz_prompt(self):
         from handlers import onboarding
 
-        # Insert user so they are NOT new
+        # Insert as already-onboarded user
         with db.transaction() as cx:
-            cx.execute("INSERT OR IGNORE INTO users (tg_id, name) VALUES (?, ?)", (8002, "Old User"))
+            cx.execute(
+                "INSERT OR IGNORE INTO users (tg_id, name, onboarded) VALUES (?, ?, 1)",
+                (8002, "Old User"),
+            )
 
         update = _mock_update(user_id=8002)
         update.effective_user.full_name = "Old User"
@@ -179,13 +182,15 @@ class TestTimezonePrompt(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(onboarding.is_awaiting_tz(8002))
         self.assertEqual(update.message.reply_text.call_count, 1)
 
-    async def test_valid_tz_reply_updates_db(self):
+    async def test_valid_tz_reply_updates_db_and_marks_onboarded(self):
         from handlers import onboarding
 
         user_id = 8003
         with db.transaction() as cx:
-            cx.execute("INSERT OR IGNORE INTO users (tg_id, name) VALUES (?, ?)", (user_id, "TZ Setter"))
-        onboarding._awaiting_tz.add(user_id)
+            cx.execute(
+                "INSERT OR IGNORE INTO users (tg_id, name, onboarded) VALUES (?, ?, 0)",
+                (user_id, "TZ Setter"),
+            )
 
         update = _mock_update(user_id=user_id, text="America/New_York")
         ctx = _mock_context()
@@ -193,37 +198,42 @@ class TestTimezonePrompt(unittest.IsolatedAsyncioTestCase):
         handled = await onboarding.handle_tz_reply(update, ctx)
         self.assertTrue(handled)
         self.assertFalse(onboarding.is_awaiting_tz(user_id))
-        row = db.conn().execute("SELECT tz FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+        row = db.conn().execute("SELECT tz, onboarded FROM users WHERE tg_id = ?", (user_id,)).fetchone()
         self.assertEqual(row["tz"], "America/New_York")
+        self.assertEqual(row["onboarded"], 1)
 
     async def test_invalid_tz_keeps_user_in_awaiting_state(self):
-        """v2.7: invalid tz reply keeps user in awaiting state so they can retry."""
+        """v2.7.2: invalid tz reply keeps user in awaiting state via DB so they can retry."""
         from handlers import onboarding
 
         user_id = 8004
         with db.transaction() as cx:
-            cx.execute("INSERT OR IGNORE INTO users (tg_id, name) VALUES (?, ?)", (user_id, "Bad TZ"))
-        onboarding._awaiting_tz.add(user_id)
+            cx.execute(
+                "INSERT OR IGNORE INTO users (tg_id, name, onboarded) VALUES (?, ?, 0)",
+                (user_id, "Bad TZ"),
+            )
 
         update = _mock_update(user_id=user_id, text="not/a/timezone!!!")
         ctx = _mock_context()
 
         handled = await onboarding.handle_tz_reply(update, ctx)
         self.assertTrue(handled)
-        # User stays in awaiting state — they can retry without /start
+        # User stays in awaiting state — onboarded should still be 0
         self.assertTrue(onboarding.is_awaiting_tz(user_id))
         update.message.reply_text.assert_called_once()
         warning = update.message.reply_text.call_args[0][0]
         self.assertIn("⚠️", warning)
 
-    async def test_explicit_skip_clears_flag(self):
-        """v2.7: only 'skip'/'bỏ qua' keywords clear the flag."""
+    async def test_explicit_skip_marks_onboarded(self):
+        """v2.7.2: only 'skip'/'bỏ qua' keywords mark onboarded."""
         from handlers import onboarding
 
         user_id = 8005
         with db.transaction() as cx:
-            cx.execute("INSERT OR IGNORE INTO users (tg_id, name) VALUES (?, ?)", (user_id, "Skipper"))
-        onboarding._awaiting_tz.add(user_id)
+            cx.execute(
+                "INSERT OR IGNORE INTO users (tg_id, name, onboarded) VALUES (?, ?, 0)",
+                (user_id, "Skipper"),
+            )
 
         update = _mock_update(user_id=user_id, text="skip")
         ctx = _mock_context()
@@ -232,19 +242,75 @@ class TestTimezonePrompt(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(onboarding.is_awaiting_tz(user_id))
 
     async def test_khong_does_not_skip_onboarding(self):
-        """v2.7 regression: 'không' is a common word and must NOT trigger skip."""
+        """v2.7.1 regression: 'không' is a common word and must NOT trigger skip."""
         from handlers import onboarding
 
         user_id = 8006
         with db.transaction() as cx:
-            cx.execute("INSERT OR IGNORE INTO users (tg_id, name) VALUES (?, ?)", (user_id, "Khong"))
-        onboarding._awaiting_tz.add(user_id)
+            cx.execute(
+                "INSERT OR IGNORE INTO users (tg_id, name, onboarded) VALUES (?, ?, 0)",
+                (user_id, "Khong"),
+            )
 
         update = _mock_update(user_id=user_id, text="không")
         ctx = _mock_context()
         await onboarding.handle_tz_reply(update, ctx)
         # Should stay in awaiting state and get a retry prompt
         self.assertTrue(onboarding.is_awaiting_tz(user_id))
+
+    async def test_state_survives_simulated_restart(self):
+        """v2.7.2 regression: onboarding state must persist in DB.
+
+        Previously stored in an in-memory _awaiting_tz set, which was lost on
+        bot restart — leaving users unable to complete onboarding.
+        """
+        from handlers import onboarding
+
+        user_id = 8007
+        with db.transaction() as cx:
+            cx.execute(
+                "INSERT OR IGNORE INTO users (tg_id, name, onboarded) VALUES (?, ?, 0)",
+                (user_id, "Restart Survivor"),
+            )
+
+        # Simulate restart by clearing any module-level caches (there shouldn't be any now).
+        # The DB row alone should be sufficient to identify the user's state.
+        self.assertTrue(onboarding.is_awaiting_tz(user_id))
+
+        # User completes onboarding after the "restart"
+        update = _mock_update(user_id=user_id, text="Hanoi")
+        ctx = _mock_context()
+        handled = await onboarding.handle_tz_reply(update, ctx)
+        self.assertTrue(handled)
+        self.assertFalse(onboarding.is_awaiting_tz(user_id))
+
+    async def test_random_garbage_doesnt_corrupt_state(self):
+        """v2.7.2 regression: garbage input must keep the user retry-able forever."""
+        from handlers import onboarding
+
+        user_id = 8008
+        with db.transaction() as cx:
+            cx.execute(
+                "INSERT OR IGNORE INTO users (tg_id, name, onboarded) VALUES (?, ?, 0)",
+                (user_id, "Garbage Typer"),
+            )
+
+        ctx = _mock_context()
+        # 10 garbage messages in a row
+        for garbage in ["...", "@@@", "?", "abc", "lol", "wtf", "  ", "x", "null", "@$%"]:
+            update = _mock_update(user_id=user_id, text=garbage)
+            await onboarding.handle_tz_reply(update, ctx)
+            self.assertTrue(
+                onboarding.is_awaiting_tz(user_id),
+                f"User was kicked out of awaiting state by garbage input {garbage!r}",
+            )
+
+        # Finally a valid input works
+        update = _mock_update(user_id=user_id, text="Tokyo")
+        await onboarding.handle_tz_reply(update, ctx)
+        self.assertFalse(onboarding.is_awaiting_tz(user_id))
+        row = db.conn().execute("SELECT tz FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+        self.assertEqual(row["tz"], "Asia/Tokyo")
 
 
 # =============================================================================

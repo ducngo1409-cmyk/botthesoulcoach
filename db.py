@@ -68,6 +68,14 @@ def _migrate() -> None:
         conn().execute("ALTER TABLE tasks ADD COLUMN max_nudges INTEGER NOT NULL DEFAULT 1")
         log.info("Migration: added tasks.max_nudges column")
 
+    # users.onboarded (v2.7.2) — persisted onboarding state
+    cur = conn().execute("PRAGMA table_info(users)")
+    ucols = {row[1] for row in cur.fetchall()}
+    if "onboarded" not in ucols:
+        # Existing users: assume they're already past onboarding
+        conn().execute("ALTER TABLE users ADD COLUMN onboarded INTEGER NOT NULL DEFAULT 1")
+        log.info("Migration: added users.onboarded column (existing users = 1)")
+
 
 def _clear_stale_escalations() -> None:
     """On startup: auto-resolve escalations open > 24h — prevents users being stuck forever."""

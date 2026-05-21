@@ -127,10 +127,8 @@ async def on_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     text = msg.text.strip()
     s = settings()
 
-    # Timezone onboarding reply — intercept before any other logic.
-    from handlers.onboarding import handle_tz_reply
-    if await handle_tz_reply(update, context):
-        return
+    # NB: onboarding tz replies are handled by handlers.access.gate at group=-1
+    # before this handler runs. We don't need to re-check here.
 
     _log_in(user.id, text)
 

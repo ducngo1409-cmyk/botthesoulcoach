@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS users (
     name       TEXT,
     tz         TEXT NOT NULL DEFAULT 'Asia/Ho_Chi_Minh',
     joined_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    status     TEXT NOT NULL DEFAULT 'active'  -- active|paused|blocked
+    status     TEXT NOT NULL DEFAULT 'active',  -- active|paused|blocked
+    onboarded  INTEGER NOT NULL DEFAULT 0       -- 0 = awaiting tz setup; 1 = done
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
